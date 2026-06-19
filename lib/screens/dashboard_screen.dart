@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../services/hydration_repository.dart';
 import '../widgets/gradient_background.dart';
+import '../widgets/hydration_buddy.dart';
 import '../widgets/soft_card.dart';
 import '../widgets/water_circle.dart';
+import 'sign_in_screen.dart';
+import 'stats_tab.dart';
+import 'settings_tab.dart';
 
 /// Top-level shell holding the bottom navigation and the three tabs.
 class DashboardScreen extends StatefulWidget {
@@ -15,41 +20,89 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _tabIndex = 0;
 
-  // Hydration state (local only — no backend yet).
-  int _currentMl = 1300;
+  // Hydration data is persisted on the device (no backend yet).
+  final HydrationRepository _repo = HydrationRepository();
   final int _targetMl = 2500;
-  String _lastIntakeLabel = '45m ago';
-  String _lastIntakeDetail = '250ml Still Water';
+  bool _loading = true;
 
-  void _logWater(int amount) {
-    setState(() {
-      _currentMl += amount;
-      _lastIntakeLabel = 'Just now';
-      _lastIntakeDetail = '${amount}ml Still Water';
-    });
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await _repo.load();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _logWater(int amount) async {
+    await _repo.addEntry(amount);
+    if (mounted) setState(() {});
+  }
+
+  String get _lastIntakeLabel {
+    final last = _repo.lastEntry;
+    if (last == null) return 'No drinks yet';
+    return _relativeTime(last.timestamp);
+  }
+
+  String get _lastIntakeDetail {
+    final last = _repo.lastEntry;
+    if (last == null) return 'Tap a quick log below';
+    return '${last.amountMl}ml ${last.type}';
+  }
+
+  /// Short relative time like "Just now", "45m ago", "3h ago", "2d ago".
+  static String _relativeTime(DateTime time) {
+    final diff = DateTime.now().difference(time);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
+  void _logout() {
+    // No backend yet — just return to the Sign In screen.
+    Navigator.of(
+      context,
+    ).pushReplacement(MaterialPageRoute(builder: (_) => const SignInScreen()));
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: GradientBackground(
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
     return Scaffold(
       body: GradientBackground(
         child: IndexedStack(
           index: _tabIndex,
           children: [
             _HomeTab(
-              currentMl: _currentMl,
+              currentMl: _repo.todayTotal,
               targetMl: _targetMl,
               lastIntakeLabel: _lastIntakeLabel,
               lastIntakeDetail: _lastIntakeDetail,
+              streak: _repo.currentStreak(_targetMl),
               onLog: _logWater,
             ),
-            const _PlaceholderTab(
-              title: 'Stats',
-              icon: Icons.bar_chart_rounded,
+            StatsTab(
+              currentMl: _repo.todayTotal,
+              targetMl: _targetMl,
+              weeklyTotals: _repo.last7Days(),
+              streak: _repo.currentStreak(_targetMl),
+              stats: _repo.statsFor(_targetMl),
+              onLogWater: () => setState(() => _tabIndex = 0),
             ),
-            const _PlaceholderTab(
-              title: 'Settings',
-              icon: Icons.settings_rounded,
+            SettingsTab(
+              userName: 'Lilo Pelekai',
+              dailyGoalLitres: '${(_targetMl / 1000).toStringAsFixed(1)}L',
+              onLogout: _logout,
             ),
           ],
         ),
@@ -68,6 +121,7 @@ class _HomeTab extends StatelessWidget {
     required this.targetMl,
     required this.lastIntakeLabel,
     required this.lastIntakeDetail,
+    required this.streak,
     required this.onLog,
   });
 
@@ -75,6 +129,7 @@ class _HomeTab extends StatelessWidget {
   final int targetMl;
   final String lastIntakeLabel;
   final String lastIntakeDetail;
+  final int streak;
   final ValueChanged<int> onLog;
 
   @override
@@ -91,7 +146,9 @@ class _HomeTab extends StatelessWidget {
               style: AppTheme.headlineLg.copyWith(fontSize: 24),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
+          HydrationBuddy(currentMl: currentMl, targetMl: targetMl),
+          const SizedBox(height: 20),
           Center(
             child: WaterCircle(
               currentMl: currentMl,
@@ -117,8 +174,10 @@ class _HomeTab extends StatelessWidget {
                   icon: Icons.local_fire_department_rounded,
                   iconColor: AppColors.hibiscus,
                   title: 'Daily Streak',
-                  value: '12 days',
-                  detail: 'Level 4 Oasis',
+                  value: streak == 1 ? '1 day' : '$streak days',
+                  detail: streak == 0
+                      ? 'Hit your goal today!'
+                      : 'Keep it going!',
                 ),
               ),
             ],
@@ -347,27 +406,6 @@ class _NavItem extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _PlaceholderTab extends StatelessWidget {
-  const _PlaceholderTab({required this.title, required this.icon});
-
-  final String title;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 56, color: AppColors.onSurfaceVariant),
-          const SizedBox(height: 16),
-          Text('$title coming soon', style: AppTheme.bodyMd),
-        ],
       ),
     );
   }

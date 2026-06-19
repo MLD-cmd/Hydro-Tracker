@@ -15,7 +15,28 @@ class HydroTrackerApp extends StatelessWidget {
       title: 'Hydro Tracker',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      scrollBehavior: const _NoStretchScrollBehavior(),
       home: const SignInScreen(),
     );
+  }
+}
+
+/// Removes Android's Material 3 "stretch" overscroll. Scrolling past an edge
+/// now stops cleanly instead of visually stretching the content.
+class _NoStretchScrollBehavior extends MaterialScrollBehavior {
+  const _NoStretchScrollBehavior();
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child; // no glow, no stretch
+  }
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    return const ClampingScrollPhysics();
   }
 }
