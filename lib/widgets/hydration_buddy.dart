@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/drink_type.dart';
 import '../theme/app_theme.dart';
 import 'soft_card.dart';
 
@@ -10,16 +11,59 @@ class HydrationBuddy extends StatefulWidget {
     super.key,
     required this.currentMl,
     required this.targetMl,
+    this.nudge,
   });
 
   final int currentMl;
   final int targetMl;
+
+  /// A gentle "drink some water" prompt when a less-hydrating drink is leading
+  /// the day. Splash shows it unless the goal is already met, in which case the
+  /// celebration wins.
+  final HydrationNudge? nudge;
 
   @override
   State<HydrationBuddy> createState() => _HydrationBuddyState();
 }
 
 enum BuddyMood { parched, thirsty, happy, overjoyed }
+
+/// The body colour Splash wears for each mood — it deepens from a pale, parched
+/// blue up to a rich, full "water blue" as you sip toward your goal, so the
+/// buddy literally looks more hydrated the fuller it gets.
+Color buddyColorFor(BuddyMood mood) {
+  switch (mood) {
+    case BuddyMood.overjoyed:
+      return const Color(0xFF1479C9); // full — deep ocean-water blue
+    case BuddyMood.happy:
+      return const Color(0xFF2E97DB); // clear water blue
+    case BuddyMood.thirsty:
+      return const Color(0xFF63B8E6); // light water blue
+    case BuddyMood.parched:
+      return const Color(0xFFAFD3E6); // pale, washed-out blue
+  }
+}
+
+/// Just the painted mascot, with no card or animation around it. Reused by the
+/// home buddy card and the goal-celebration moment.
+class BuddyFace extends StatelessWidget {
+  const BuddyFace({super.key, required this.mood, this.size = 72, this.color});
+
+  final BuddyMood mood;
+  final double size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _BuddyPainter(mood: mood, color: color ?? buddyColorFor(mood)),
+      ),
+    );
+  }
+}
 
 class _HydrationBuddyState extends State<HydrationBuddy>
     with SingleTickerProviderStateMixin {
@@ -45,30 +89,37 @@ class _HydrationBuddyState extends State<HydrationBuddy>
   }
 
   ({String title, String line, Color color}) get _persona {
+    final color = buddyColorFor(_mood);
+    // A gentle nudge toward water when a less-hydrating drink is leading — but
+    // only while the goal is still in reach. A smashed goal celebrates first.
+    final nudge = widget.nudge;
+    if (nudge != null && _mood != BuddyMood.overjoyed) {
+      return (title: nudge.title, line: nudge.line, color: color);
+    }
     switch (_mood) {
       case BuddyMood.overjoyed:
         return (
           title: 'Goal smashed! 🎉',
           line: "You're a Hydration Hero today. Splash is beaming!",
-          color: AppColors.secondaryAccent,
+          color: color,
         );
       case BuddyMood.happy:
         return (
           title: 'Feeling fresh!',
           line: 'Over halfway there — keep the tide rolling.',
-          color: AppColors.secondaryAccent,
+          color: color,
         );
       case BuddyMood.thirsty:
         return (
           title: 'Getting there…',
           line: 'A few more sips and Splash will be smiling.',
-          color: AppColors.turquoise,
+          color: color,
         );
       case BuddyMood.parched:
         return (
           title: "I'm parched!",
           line: 'Tap a quick log below to help Splash out.',
-          color: const Color(0xFF9FD8D0),
+          color: color,
         );
     }
   }
@@ -92,9 +143,7 @@ class _HydrationBuddyState extends State<HydrationBuddy>
                   child: child,
                 );
               },
-              child: CustomPaint(
-                painter: _BuddyPainter(mood: _mood, color: persona.color),
-              ),
+              child: BuddyFace(mood: _mood, color: persona.color, size: 72),
             ),
           ),
           const SizedBox(width: 16),

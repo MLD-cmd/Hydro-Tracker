@@ -1,34 +1,40 @@
 import 'package:flutter/material.dart';
+import '../models/app_settings.dart';
+import '../services/weather_service.dart';
+import '../state/environment_theme.dart';
 import '../theme/app_theme.dart';
 import '../widgets/soft_card.dart';
 
-/// Settings tab — profile, notification preferences, environment theme picker
-/// and logout. State is local only (no backend yet); the theme picker is a
-/// visual selection and doesn't recolour the app yet.
-class SettingsTab extends StatefulWidget {
+/// Settings tab — profile, daily goal (editable + smart), notification
+/// preferences, environment theme picker, history and logout. All state is
+/// persisted through [onSettingsChanged]; nothing here is local-only anymore.
+class SettingsTab extends StatelessWidget {
   const SettingsTab({
     super.key,
-    required this.userName,
-    required this.dailyGoalLitres,
+    required this.settings,
+    required this.weather,
+    required this.goalBump,
+    required this.onSettingsChanged,
+    required this.onOpenHistory,
     required this.onLogout,
   });
 
-  final String userName;
-  final String dailyGoalLitres;
+  final AppSettings settings;
+  final IslandWeather weather;
+  final int goalBump;
+  final ValueChanged<AppSettings> onSettingsChanged;
+  final VoidCallback onOpenHistory;
   final VoidCallback onLogout;
 
-  @override
-  State<SettingsTab> createState() => _SettingsTabState();
-}
-
-class _SettingsTabState extends State<SettingsTab> {
-  bool _hydrationReminders = true;
-  bool _quietHours = false;
-  int _themeIndex = 0; // 0 Shoreline, 1 Midnight, 2 Hibiscus
+  String _litres(int ml) => '${(ml / 1000).toStringAsFixed(1)}L';
 
   @override
   Widget build(BuildContext context) {
+    final effectiveGoal =
+        settings.baseGoalMl + (settings.smartGoal ? goalBump : 0);
+
     return SingleChildScrollView(
+      key: const PageStorageKey('settings_scroll'),
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -42,8 +48,30 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           const SizedBox(height: 8),
           _ProfileCard(
-            name: widget.userName,
-            dailyGoal: widget.dailyGoalLitres,
+            name: settings.userName,
+            dailyGoal: _litres(settings.baseGoalMl),
+          ),
+          const SizedBox(height: 28),
+          _SectionLabel('DAILY GOAL'),
+          const SizedBox(height: 12),
+          _GoalCard(
+            goalMl: settings.baseGoalMl,
+            onChanged: (ml) =>
+                onSettingsChanged(settings.copyWith(baseGoalMl: ml)),
+          ),
+          const SizedBox(height: 12),
+          SoftCard(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: _SettingToggleRow(
+              icon: Icons.wb_sunny_rounded,
+              title: 'Smart Goal',
+              subtitle: settings.smartGoal && goalBump > 0
+                  ? "${weather.tempC}°C today → ${_litres(effectiveGoal)} goal"
+                  : 'Raise the goal on hot island days',
+              value: settings.smartGoal,
+              onChanged: (v) =>
+                  onSettingsChanged(settings.copyWith(smartGoal: v)),
+            ),
           ),
           const SizedBox(height: 28),
           _SectionLabel('NOTIFICATIONS'),
@@ -56,16 +84,18 @@ class _SettingsTabState extends State<SettingsTab> {
                   icon: Icons.notifications_none_rounded,
                   title: 'Hydration Reminders',
                   subtitle: 'Gentle nudges to keep sipping',
-                  value: _hydrationReminders,
-                  onChanged: (v) => setState(() => _hydrationReminders = v),
+                  value: settings.reminders,
+                  onChanged: (v) =>
+                      onSettingsChanged(settings.copyWith(reminders: v)),
                 ),
                 const Divider(height: 1, indent: 56),
                 _SettingToggleRow(
                   icon: Icons.nightlight_round,
                   title: 'Island Quiet Hours',
-                  subtitle: 'Pause alerts during sunset',
-                  value: _quietHours,
-                  onChanged: (v) => setState(() => _quietHours = v),
+                  subtitle: 'Pause alerts from 10pm to 7am',
+                  value: settings.quietHours,
+                  onChanged: (v) =>
+                      onSettingsChanged(settings.copyWith(quietHours: v)),
                 ),
               ],
             ),
@@ -75,54 +105,60 @@ class _SettingsTabState extends State<SettingsTab> {
           const SizedBox(height: 12),
           Row(
             children: [
-              for (var i = 0; i < _themes.length; i++) ...[
+              for (var i = 0; i < kEnvironmentThemes.length; i++) ...[
                 if (i > 0) const SizedBox(width: 14),
                 Expanded(
                   child: _ThemeSwatch(
-                    theme: _themes[i],
-                    selected: _themeIndex == i,
-                    onTap: () => setState(() => _themeIndex = i),
+                    theme: kEnvironmentThemes[i],
+                    selected: settings.themeIndex == i,
+                    onTap: () =>
+                        onSettingsChanged(settings.copyWith(themeIndex: i)),
                   ),
                 ),
               ],
             ],
           ),
           const SizedBox(height: 28),
-          _LogoutCard(onTap: widget.onLogout),
+          _SectionLabel('DATA'),
+          const SizedBox(height: 12),
+          SoftCard(
+            onTap: onOpenHistory,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.receipt_long_rounded,
+                    size: 20,
+                    color: AppColors.primaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    'Hydration Log',
+                    style: AppTheme.labelBold.copyWith(fontSize: 15),
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          _LogoutCard(onTap: onLogout),
         ],
       ),
     );
   }
-}
-
-const _themes = <_ThemeOption>[
-  _ThemeOption(
-    label: 'Shoreline',
-    colors: [Color(0xFFD9F5EE), Color(0xFF8FE3D6)],
-    showDot: false,
-  ),
-  _ThemeOption(
-    label: 'Midnight',
-    colors: [Color(0xFF0B2A45), Color(0xFF061525)],
-    showDot: true,
-  ),
-  _ThemeOption(
-    label: 'Hibiscus',
-    colors: [Color(0xFFE0466F), Color(0xFF7E2038)],
-    showDot: false,
-  ),
-];
-
-class _ThemeOption {
-  const _ThemeOption({
-    required this.label,
-    required this.colors,
-    required this.showDot,
-  });
-
-  final String label;
-  final List<Color> colors;
-  final bool showDot;
 }
 
 class _ProfileCard extends StatelessWidget {
@@ -203,6 +239,82 @@ class _ProfileCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A stepper card for the base daily goal (1.0L–5.0L in 100ml steps).
+class _GoalCard extends StatelessWidget {
+  const _GoalCard({required this.goalMl, required this.onChanged});
+
+  final int goalMl;
+  final ValueChanged<int> onChanged;
+
+  static const _min = 1000;
+  static const _max = 5000;
+  static const _step = 100;
+
+  @override
+  Widget build(BuildContext context) {
+    return SoftCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          _StepButton(
+            icon: Icons.remove_rounded,
+            enabled: goalMl > _min,
+            onTap: () => onChanged((goalMl - _step).clamp(_min, _max)),
+          ),
+          Column(
+            children: [
+              Text(
+                '${(goalMl / 1000).toStringAsFixed(goalMl % 1000 == 0 ? 0 : 1)}L',
+                style: AppTheme.headlineLg.copyWith(fontSize: 26),
+              ),
+              Text(
+                '$goalMl ml per day',
+                style: AppTheme.bodyMd.copyWith(fontSize: 12),
+              ),
+            ],
+          ),
+          _StepButton(
+            icon: Icons.add_rounded,
+            enabled: goalMl < _max,
+            onTap: () => onChanged((goalMl + _step).clamp(_min, _max)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StepButton extends StatelessWidget {
+  const _StepButton({
+    required this.icon,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: enabled
+          ? AppColors.secondaryAccent
+          : AppColors.outlineVariant.withValues(alpha: 0.4),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Icon(icon, color: AppColors.white, size: 24),
         ),
       ),
     );
@@ -296,7 +408,7 @@ class _ThemeSwatch extends StatelessWidget {
     required this.onTap,
   });
 
-  final _ThemeOption theme;
+  final EnvironmentTheme theme;
   final bool selected;
   final VoidCallback onTap;
 
@@ -332,10 +444,10 @@ class _ThemeSwatch extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: theme.colors,
+                    colors: theme.swatch,
                   ),
                 ),
-                child: theme.showDot
+                child: theme.showMoon
                     ? const Align(
                         alignment: Alignment(0.5, -0.5),
                         child: _Dot(),

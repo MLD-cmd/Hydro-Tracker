@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/drink_type.dart';
 import '../models/water_entry.dart';
 import '../models/achievement.dart';
 
@@ -33,7 +34,7 @@ class HydrationRepository {
   }
 
   /// Records a drink at the current time and saves.
-  Future<WaterEntry> addEntry(int amountMl, {String type = 'Still Water'}) async {
+  Future<WaterEntry> addEntry(int amountMl, {String type = 'Water'}) async {
     final entry = WaterEntry(
       amountMl: amountMl,
       timestamp: DateTime.now(),
@@ -44,14 +45,58 @@ class HydrationRepository {
     return entry;
   }
 
-  /// Total millilitres logged on the given day (defaults to today).
+  /// Removes a specific entry (by identity) and saves.
+  Future<void> deleteEntry(WaterEntry entry) async {
+    _entries.remove(entry);
+    await _persist();
+  }
+
+  /// Removes the most recently logged entry (used by Undo).
+  Future<void> removeLast() async {
+    final last = lastEntry;
+    if (last != null) await deleteEntry(last);
+  }
+
+  /// Entries newest-first, for the history list.
+  List<WaterEntry> get entriesNewestFirst {
+    final list = [..._entries];
+    list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return list;
+  }
+
+  /// Effective (hydration-weighted) millilitres logged on the given day.
   int totalForDay(DateTime day) {
     return _entries
         .where((e) => _isSameDay(e.timestamp, day))
-        .fold(0, (sum, e) => sum + e.amountMl);
+        .fold(0, (sum, e) => sum + e.effectiveMl);
   }
 
   int get todayTotal => totalForDay(DateTime.now());
+
+  /// Raw (unweighted) millilitres logged today, grouped by drink-type name.
+  /// Drives the "Today's Mix" bars and the coffee-vs-water buddy nudge — both
+  /// compare what was actually poured, so they use raw volume, not the
+  /// hydration-weighted total.
+  Map<String, int> todayByType() {
+    final today = DateTime.now();
+    final byType = <String, int>{};
+    for (final e in _entries.where((e) => _isSameDay(e.timestamp, today))) {
+      // Resolve through the catalog so legacy/unknown type names (e.g. an old
+      // "Still Water") fold into their real drink type instead of becoming an
+      // invisible bucket that inflates the total.
+      final name = drinkTypeByName(e.type).name;
+      byType[name] = (byType[name] ?? 0) + e.amountMl;
+    }
+    return byType;
+  }
+
+  /// Today's entries in the order they were logged (earliest first). Drives the
+  /// Stats "Today" timeline, which shows *when* through the day you drank.
+  List<WaterEntry> todayEntries() {
+    final today = DateTime.now();
+    return _entries.where((e) => _isSameDay(e.timestamp, today)).toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
 
   /// The most recent entry, or null if nothing has been logged yet.
   WaterEntry? get lastEntry {
@@ -62,11 +107,17 @@ class HydrationRepository {
   }
 
   /// Totals for the last 7 days, oldest first. Index 6 is today.
-  List<DayTotal> last7Days() {
+  List<DayTotal> last7Days() => lastNDays(7);
+
+  /// Totals for the last [n] days, oldest first. The last entry is today.
+  List<DayTotal> lastNDays(int n) {
     final today = DateTime.now();
-    return List.generate(7, (i) {
-      final day = DateTime(today.year, today.month, today.day)
-          .subtract(Duration(days: 6 - i));
+    return List.generate(n, (i) {
+      final day = DateTime(
+        today.year,
+        today.month,
+        today.day,
+      ).subtract(Duration(days: n - 1 - i));
       return DayTotal(day: day, totalMl: totalForDay(day));
     });
   }
@@ -91,9 +142,9 @@ class HydrationRepository {
   HydrationStats statsFor(int goalMl) {
     if (_entries.isEmpty) return HydrationStats.empty;
 
-    final lifetime = _entries.fold(0, (sum, e) => sum + e.amountMl);
+    final lifetime = _entries.fold(0, (sum, e) => sum + e.effectiveMl);
 
-    // Collapse entries into per-day totals.
+    // Collapse entries into per-day effective totals.
     final perDay = <DateTime, int>{};
     for (final e in _entries) {
       final day = DateTime(
@@ -101,7 +152,7 @@ class HydrationRepository {
         e.timestamp.month,
         e.timestamp.day,
       );
-      perDay[day] = (perDay[day] ?? 0) + e.amountMl;
+      perDay[day] = (perDay[day] ?? 0) + e.effectiveMl;
     }
 
     // Days that met the goal, oldest first.

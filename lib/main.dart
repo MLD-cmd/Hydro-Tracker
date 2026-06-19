@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
 import 'screens/sign_in_screen.dart';
+import 'services/settings_repository.dart';
+import 'state/environment_theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Apply the saved environment theme before the first frame.
+  final settings = SettingsRepository();
+  await settings.load();
+  environmentThemeIndex.value = settings.settings.themeIndex;
   runApp(const HydroTrackerApp());
 }
 

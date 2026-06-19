@@ -13,7 +13,6 @@ class AppColors {
   static const Color surface = Color(0xFFFFF8F5);
   static const Color surfaceContainerLow = Color(0xFFFFF1E7);
   static const Color surfaceContainer = Color(0xFFFEEADB);
-  static const Color surfaceContainerHigh = Color(0xFFF8E5D6);
   static const Color white = Color(0xFFFFFFFF);
 
   // Neomorphic shadow tints
