@@ -18,6 +18,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
+  bool _creating = false;
 
   @override
   void dispose() {
@@ -28,8 +29,13 @@ class _SignUpScreenState extends State<SignUpScreen> {
     super.dispose();
   }
 
-  void _createAccount() {
-    // No backend yet — go straight to the dashboard for the flow.
+  Future<void> _createAccount() async {
+    if (_creating) return;
+    setState(() => _creating = true);
+    // No backend yet — briefly show a spinner so it feels like a real sign-up,
+    // then go to the dashboard.
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const DashboardScreen()),
       (route) => false,
@@ -97,6 +103,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 child: PrimaryButton(
                   label: 'Create Account',
                   onPressed: _createAccount,
+                  loading: _creating,
                 ),
               ),
               const SizedBox(height: 20),

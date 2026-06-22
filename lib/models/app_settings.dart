@@ -7,6 +7,9 @@ class AppSettings {
     this.reminders = true,
     this.quietHours = false,
     this.userName = 'Lilo Pelekai',
+    this.weatherCity = 'Manila',
+    this.onboarded = false,
+    this.profilePhotoPath,
   });
 
   /// The goal the user set by hand. The *effective* goal may be higher when
@@ -18,6 +21,16 @@ class AppSettings {
   final bool quietHours;
   final String userName;
 
+  /// The Philippine city used for the live Smart-Goal weather lookup.
+  final String weatherCity;
+
+  /// Whether the one-time onboarding has been completed.
+  final bool onboarded;
+
+  /// Absolute path to the user's chosen profile photo, or null for the initials
+  /// avatar.
+  final String? profilePhotoPath;
+
   AppSettings copyWith({
     int? baseGoalMl,
     bool? smartGoal,
@@ -25,6 +38,10 @@ class AppSettings {
     bool? reminders,
     bool? quietHours,
     String? userName,
+    String? weatherCity,
+    bool? onboarded,
+    String? profilePhotoPath,
+    bool removePhoto = false,
   }) {
     return AppSettings(
       baseGoalMl: baseGoalMl ?? this.baseGoalMl,
@@ -33,6 +50,10 @@ class AppSettings {
       reminders: reminders ?? this.reminders,
       quietHours: quietHours ?? this.quietHours,
       userName: userName ?? this.userName,
+      weatherCity: weatherCity ?? this.weatherCity,
+      onboarded: onboarded ?? this.onboarded,
+      profilePhotoPath:
+          removePhoto ? null : (profilePhotoPath ?? this.profilePhotoPath),
     );
   }
 
@@ -43,6 +64,9 @@ class AppSettings {
     'reminders': reminders,
     'quietHours': quietHours,
     'userName': userName,
+    'weatherCity': weatherCity,
+    'onboarded': onboarded,
+    'profilePhotoPath': profilePhotoPath,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -52,5 +76,8 @@ class AppSettings {
     reminders: (json['reminders'] as bool?) ?? true,
     quietHours: (json['quietHours'] as bool?) ?? false,
     userName: (json['userName'] as String?) ?? 'Lilo Pelekai',
+    weatherCity: (json['weatherCity'] as String?) ?? 'Manila',
+    onboarded: (json['onboarded'] as bool?) ?? false,
+    profilePhotoPath: json['profilePhotoPath'] as String?,
   );
 }

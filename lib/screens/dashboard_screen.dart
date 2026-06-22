@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
+import '../models/achievement.dart';
 import '../models/app_settings.dart';
 import '../models/drink_type.dart';
 import '../services/hydration_repository.dart';
@@ -37,7 +38,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   static const WeatherService _weather = WeatherService();
 
   AppSettings _settings = const AppSettings();
-  late final IslandWeather _todayWeather = _weather.today();
+  // Starts as the instant offline simulation, then is replaced by the live
+  // temperature for the chosen city once the network responds (see
+  // [_refreshWeather]).
+  IslandWeather _todayWeather = _weather.simulated();
   DrinkType _selectedType = kDrinkTypes.first;
   bool _loading = true;
 
@@ -71,6 +75,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
       enabled: _settings.reminders,
       quietHours: _settings.quietHours,
     );
+    // Replace the simulated weather with the live temperature for the saved
+    // city. Fire-and-forget: the UI already has a usable value to show.
+    _refreshWeather();
+  }
+
+  /// Pulls the live temperature for the saved city and updates the UI. Safe to
+  /// call repeatedly; on failure [WeatherService.fetch] returns the simulation.
+  Future<void> _refreshWeather() async {
+    final weather = await _weather.fetch(cityByName(_settings.weatherCity));
+    if (!mounted) return;
+    setState(() => _todayWeather = weather);
+  }
+
+  /// Pull-to-refresh: re-read saved data and re-fetch today's live weather.
+  Future<void> _refresh() async {
+    await Future.wait([_repo.load(), _settingsRepo.load()]);
+    if (mounted) setState(() => _settings = _settingsRepo.settings);
+    await _refreshWeather();
   }
 
   /// A gentle nudge toward water when less-hydrating drinks (coffee, juice)
@@ -94,21 +116,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _logWater(int amount) async {
     final goal = _effectiveGoal;
     final before = _repo.todayTotal;
+    // Which badges were already earned before this drink, so we can spot the
+    // ones this drink unlocks.
+    final unlockedBefore = _unlockedAchievementIds(goal);
     await _repo.addEntry(amount, type: _selectedType.name);
     final after = _repo.todayTotal;
+    final newlyUnlocked = kAchievements
+        .where((a) =>
+            a.isUnlocked(_repo.statsFor(goal)) && !unlockedBefore.contains(a.id))
+        .toList();
     if (!mounted) return;
     setState(() {});
 
     _showUndoSnackBar(amount);
 
-    // Celebrate the moment the day's total first crosses the goal.
+    // Celebrate the moment the day's total first crosses the goal, then announce
+    // any badges that drink earned. Awaited so they appear one at a time rather
+    // than stacking on top of each other.
     if (before < goal && after >= goal) {
-      showGoalCelebration(
+      await showGoalCelebration(
         context,
         streak: _repo.currentStreak(goal),
         goalMl: goal,
       );
     }
+    for (final achievement in newlyUnlocked) {
+      if (!mounted) break;
+      await showAchievementCelebration(context, achievement: achievement);
+    }
+  }
+
+  /// The ids of every achievement currently unlocked for [goal].
+  Set<String> _unlockedAchievementIds(int goal) {
+    final stats = _repo.statsFor(goal);
+    return {
+      for (final a in kAchievements)
+        if (a.isUnlocked(stats)) a.id,
+    };
   }
 
   void _showUndoSnackBar(int amount) {
@@ -142,6 +186,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final remindersChanged =
         next.reminders != _settings.reminders ||
         next.quietHours != _settings.quietHours;
+    final cityChanged = next.weatherCity != _settings.weatherCity;
     await _settingsRepo.save(next);
     environmentThemeIndex.value = next.themeIndex;
     if (mounted) setState(() => _settings = next);
@@ -151,6 +196,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         quietHours: next.quietHours,
       );
     }
+    // Picking a new city re-pulls the live temperature for that place.
+    if (cityChanged) _refreshWeather();
   }
 
   void _openHistory() {
@@ -223,6 +270,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               nudge: _nudge,
               onSelectType: (t) => setState(() => _selectedType = t),
               onLog: _logWater,
+              onRefresh: _refresh,
             ),
             StatsTab(
               currentMl: _repo.todayTotal,
@@ -268,6 +316,7 @@ class _HomeTab extends StatelessWidget {
     required this.nudge,
     required this.onSelectType,
     required this.onLog,
+    required this.onRefresh,
   });
 
   final int currentMl;
@@ -285,13 +334,18 @@ class _HomeTab extends StatelessWidget {
   final HydrationNudge? nudge;
   final ValueChanged<DrinkType> onSelectType;
   final ValueChanged<int> onLog;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      key: const PageStorageKey('home_scroll'),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-      child: Column(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      color: AppColors.secondaryAccent,
+      child: SingleChildScrollView(
+        key: const PageStorageKey('home_scroll'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
@@ -307,7 +361,7 @@ class _HomeTab extends StatelessWidget {
             targetMl: targetMl,
             nudge: nudge,
           ),
-          if (smartGoalActive && goalBump > 0) ...[
+          if (smartGoalActive) ...[
             const SizedBox(height: 12),
             _WeatherBanner(weather: weather, goalBump: goalBump),
           ],
@@ -364,6 +418,7 @@ class _HomeTab extends StatelessWidget {
             _DrinkMixCard(byType: byType, nudge: nudge),
           ],
         ],
+        ),
       ),
     );
   }
@@ -428,7 +483,7 @@ class _DrinkMixCard extends StatelessWidget {
           Text(
             total == 0
                 ? 'What you sip will show up here'
-                : 'Your share of each drink today',
+                : 'How much of each drink today — and its share',
             style: AppTheme.bodyMd.copyWith(fontSize: 13),
           ),
           const SizedBox(height: 18),
@@ -439,6 +494,7 @@ class _DrinkMixCard extends StatelessWidget {
                 Expanded(
                   child: _MixBar(
                     type: type,
+                    ml: byType[type.name]!,
                     pct: total == 0 ? 0 : (byType[type.name]! / total),
                   ),
                 ),
@@ -451,9 +507,10 @@ class _DrinkMixCard extends StatelessWidget {
 }
 
 class _MixBar extends StatelessWidget {
-  const _MixBar({required this.type, required this.pct});
+  const _MixBar({required this.type, required this.ml, required this.pct});
 
   final DrinkType type;
+  final int ml; // raw millilitres of this drink today — never decreases
   final double pct; // share of the day's volume, 0..1
 
   @override
@@ -496,8 +553,10 @@ class _MixBar extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          // Hero number: the real amount you drank. This never shrinks when you
+          // log another drink — only the share below it shifts.
           Text(
-            '${(pct * 100).round()}%',
+            '$ml ml',
             style: AppTheme.labelBold.copyWith(
               fontSize: 13,
               color: AppColors.onSurface,
@@ -508,6 +567,16 @@ class _MixBar extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppTheme.bodyMd.copyWith(fontSize: 11),
+          ),
+          const SizedBox(height: 2),
+          // Demoted share — clearly a slice of the day's mix, so a shift reads
+          // as "smaller slice", not "my water disappeared".
+          Text(
+            '${(pct * 100).round()}% of mix',
+            style: AppTheme.bodyMd.copyWith(
+              fontSize: 10,
+              color: AppColors.onSurface.withValues(alpha: 0.5),
+            ),
           ),
         ],
       ),
@@ -596,7 +665,9 @@ class _DrinkSegment extends StatelessWidget {
   }
 }
 
-/// A small banner shown on hot days when the smart goal nudged the target up.
+/// A small weather banner shown whenever the smart goal is on, so switching
+/// city always gives visible feedback. On a hot day (goal bumped) it's a warm
+/// "drink more" note; on a mild day it simply confirms the goal is unchanged.
 class _WeatherBanner extends StatelessWidget {
   const _WeatherBanner({required this.weather, required this.goalBump});
 
@@ -605,26 +676,53 @@ class _WeatherBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final extra = (goalBump / 1000).toStringAsFixed(goalBump % 1000 == 0 ? 0 : 1);
+    final hot = goalBump > 0;
+    final extra =
+        (goalBump / 1000).toStringAsFixed(goalBump % 1000 == 0 ? 0 : 1);
+    final place = "${weather.tempC}°C in ${weather.place} (${weather.label})";
+    final message = hot
+        ? "It's $place — goal nudged up ${extra}L to keep you cool."
+        : "It's $place — a comfy day, so your goal stays as set.";
+    final accent = hot ? const Color(0xFFE9920B) : const Color(0xFF2E97DB);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF1D6),
+        color: hot ? const Color(0xFFFFF1D6) : const Color(0xFFE2F1F8),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.wb_sunny_rounded, color: Color(0xFFE9920B), size: 22),
+          Icon(
+            hot ? Icons.wb_sunny_rounded : Icons.water_drop_rounded,
+            color: accent,
+            size: 22,
+          ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              "It's ${weather.tempC}°C on the island (${weather.label}) — "
-              "goal nudged up ${extra}L to keep you cool.",
-              style: AppTheme.bodyMd.copyWith(
-                fontSize: 12.5,
-                height: 1.35,
-                color: AppColors.onSurface,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message,
+                  style: AppTheme.bodyMd.copyWith(
+                    fontSize: 12.5,
+                    height: 1.35,
+                    color: AppColors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // A weather-appropriate, hydration-friendly drink tip.
+                Text(
+                  drinkSuggestionFor(weather.tempC),
+                  style: AppTheme.labelBold.copyWith(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: accent,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

@@ -2,6 +2,8 @@
     <!-- Local hydration reminders -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Live weather lookup (Open-Meteo) for the Smart Goal -->
+    <uses-permission android:name="android.permission.INTERNET"/>
 
     <application
         android:label="hydro_tracker"

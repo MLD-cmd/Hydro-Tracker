@@ -17,6 +17,7 @@ class SignInScreen extends StatefulWidget {
 class _SignInScreenState extends State<SignInScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _signingIn = false;
 
   @override
   void dispose() {
@@ -25,8 +26,13 @@ class _SignInScreenState extends State<SignInScreen> {
     super.dispose();
   }
 
-  void _signIn() {
-    // No backend yet — go straight to the dashboard for the flow.
+  Future<void> _signIn() async {
+    if (_signingIn) return;
+    setState(() => _signingIn = true);
+    // No backend yet — briefly show a spinner so it feels like a real sign-in,
+    // then go to the dashboard.
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const DashboardScreen()),
     );
@@ -85,7 +91,11 @@ class _SignInScreenState extends State<SignInScreen> {
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
-                child: PrimaryButton(label: 'Sign In', onPressed: _signIn),
+                child: PrimaryButton(
+                  label: 'Sign In',
+                  onPressed: _signIn,
+                  loading: _signingIn,
+                ),
               ),
               const SizedBox(height: 32),
               Row(

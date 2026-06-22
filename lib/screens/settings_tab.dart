@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/app_settings.dart';
 import '../services/weather_service.dart';
 import '../state/environment_theme.dart';
@@ -28,6 +32,26 @@ class SettingsTab extends StatelessWidget {
 
   String _litres(int ml) => '${(ml / 1000).toStringAsFixed(1)}L';
 
+  Future<void> _openEditProfile(BuildContext context) async {
+    final result = await showModalBottomSheet<_ProfileEdit>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _EditProfileSheet(
+        initialName: settings.userName,
+        photoPath: settings.profilePhotoPath,
+      ),
+    );
+    if (result == null) return;
+    onSettingsChanged(
+      settings.copyWith(
+        userName: result.name,
+        profilePhotoPath: result.photoPath,
+        removePhoto: result.photoPath == null,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final effectiveGoal =
@@ -49,7 +73,9 @@ class SettingsTab extends StatelessWidget {
           const SizedBox(height: 8),
           _ProfileCard(
             name: settings.userName,
+            photoPath: settings.profilePhotoPath,
             dailyGoal: _litres(settings.baseGoalMl),
+            onEdit: () => _openEditProfile(context),
           ),
           const SizedBox(height: 28),
           _SectionLabel('DAILY GOAL'),
@@ -62,15 +88,26 @@ class SettingsTab extends StatelessWidget {
           const SizedBox(height: 12),
           SoftCard(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: _SettingToggleRow(
-              icon: Icons.wb_sunny_rounded,
-              title: 'Smart Goal',
-              subtitle: settings.smartGoal && goalBump > 0
-                  ? "${weather.tempC}°C today → ${_litres(effectiveGoal)} goal"
-                  : 'Raise the goal on hot island days',
-              value: settings.smartGoal,
-              onChanged: (v) =>
-                  onSettingsChanged(settings.copyWith(smartGoal: v)),
+            child: Column(
+              children: [
+                _SettingToggleRow(
+                  icon: Icons.wb_sunny_rounded,
+                  title: 'Smart Goal',
+                  subtitle: settings.smartGoal && goalBump > 0
+                      ? "${weather.tempC}°C in ${weather.place} → ${_litres(effectiveGoal)} goal"
+                      : 'Raise the goal on hot island days',
+                  value: settings.smartGoal,
+                  onChanged: (v) =>
+                      onSettingsChanged(settings.copyWith(smartGoal: v)),
+                ),
+                const Divider(height: 1, indent: 56),
+                _CityRow(
+                  city: settings.weatherCity,
+                  live: weather.isLive,
+                  onChanged: (c) =>
+                      onSettingsChanged(settings.copyWith(weatherCity: c)),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 28),
@@ -162,10 +199,17 @@ class SettingsTab extends StatelessWidget {
 }
 
 class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.name, required this.dailyGoal});
+  const _ProfileCard({
+    required this.name,
+    required this.photoPath,
+    required this.dailyGoal,
+    required this.onEdit,
+  });
 
   final String name;
+  final String? photoPath;
   final String dailyGoal;
+  final VoidCallback onEdit;
 
   String get _initials {
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -177,9 +221,11 @@ class _ProfileCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasPhoto = photoPath != null && File(photoPath!).existsSync();
     return SizedBox(
       width: double.infinity,
       child: SoftCard(
+        onTap: onEdit,
         padding: const EdgeInsets.symmetric(vertical: 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -198,13 +244,21 @@ class _ProfileCard extends StatelessWidget {
                       shape: BoxShape.circle,
                     ),
                     alignment: Alignment.center,
-                    child: Text(
-                      _initials,
-                      style: AppTheme.headlineLg.copyWith(
-                        fontSize: 30,
-                        color: AppColors.onPrimary,
-                      ),
-                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: hasPhoto
+                        ? Image.file(
+                            File(photoPath!),
+                            width: 88,
+                            height: 88,
+                            fit: BoxFit.cover,
+                          )
+                        : Text(
+                            _initials,
+                            style: AppTheme.headlineLg.copyWith(
+                              fontSize: 30,
+                              color: AppColors.onPrimary,
+                            ),
+                          ),
                   ),
                   Positioned(
                     right: 0,
@@ -236,6 +290,230 @@ class _ProfileCard extends StatelessWidget {
                 fontSize: 12,
                 letterSpacing: 1.5,
                 color: AppColors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The result returned by [_EditProfileSheet]: the new name and photo path
+/// (null means "no photo / removed").
+class _ProfileEdit {
+  const _ProfileEdit({required this.name, required this.photoPath});
+
+  final String name;
+  final String? photoPath;
+}
+
+/// A bottom sheet for editing the profile: tap the avatar to pick a photo from
+/// the gallery, edit the display name, then save.
+class _EditProfileSheet extends StatefulWidget {
+  const _EditProfileSheet({required this.initialName, required this.photoPath});
+
+  final String initialName;
+  final String? photoPath;
+
+  @override
+  State<_EditProfileSheet> createState() => _EditProfileSheetState();
+}
+
+class _EditProfileSheetState extends State<_EditProfileSheet> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.initialName);
+  String? _photoPath;
+  bool _picking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _photoPath = widget.photoPath;
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  String get _initials {
+    final parts = _name.text.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+    return (parts.first.characters.first + parts.last.characters.first)
+        .toUpperCase();
+  }
+
+  Future<void> _pickPhoto() async {
+    if (_picking) return;
+    setState(() => _picking = true);
+    try {
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 600,
+        imageQuality: 85,
+      );
+      if (file != null) {
+        // Copy into the app's documents dir so the path survives restarts.
+        final dir = await getApplicationDocumentsDirectory();
+        final ext = file.path.contains('.') ? file.path.split('.').last : 'jpg';
+        final dest =
+            '${dir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.$ext';
+        await File(file.path).copy(dest);
+        if (mounted) setState(() => _photoPath = dest);
+      }
+    } catch (_) {
+      // Picker cancelled or failed — nothing to do.
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 5,
+              decoration: BoxDecoration(
+                color: AppColors.outlineVariant,
+                borderRadius: BorderRadius.circular(50),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text('Edit Profile', style: AppTheme.headlineLg.copyWith(fontSize: 20)),
+            const SizedBox(height: 20),
+            GestureDetector(
+              onTap: _pickPhoto,
+              child: SizedBox(
+                width: 100,
+                height: 100,
+                child: Stack(
+                  children: [
+                    Container(
+                      width: 100,
+                      height: 100,
+                      decoration: const BoxDecoration(
+                        color: AppColors.primaryContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      clipBehavior: Clip.antiAlias,
+                      child: _picking
+                          ? const CircularProgressIndicator(
+                              valueColor:
+                                  AlwaysStoppedAnimation(AppColors.onPrimary),
+                            )
+                          : hasPhoto
+                              ? Image.file(
+                                  File(_photoPath!),
+                                  width: 100,
+                                  height: 100,
+                                  fit: BoxFit.cover,
+                                )
+                              : Text(
+                                  _initials,
+                                  style: AppTheme.headlineLg.copyWith(
+                                    fontSize: 34,
+                                    color: AppColors.onPrimary,
+                                  ),
+                                ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: AppColors.secondaryAccent,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.white, width: 3),
+                        ),
+                        child: const Icon(
+                          Icons.camera_alt_rounded,
+                          size: 16,
+                          color: AppColors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (hasPhoto)
+              TextButton(
+                onPressed: () => setState(() => _photoPath = null),
+                child: Text(
+                  'Remove photo',
+                  style: AppTheme.labelBold.copyWith(
+                    fontSize: 13,
+                    color: AppColors.hibiscus,
+                  ),
+                ),
+              )
+            else
+              Text(
+                'Tap to add a photo',
+                style: AppTheme.bodyMd.copyWith(fontSize: 12),
+              ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _name,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: 'Display name',
+                filled: true,
+                fillColor: AppColors.surfaceContainerLow,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 22),
+            SizedBox(
+              width: double.infinity,
+              child: Material(
+                color: AppColors.secondaryAccent,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    final name = _name.text.trim();
+                    Navigator.of(context).pop(
+                      _ProfileEdit(
+                        name: name.isEmpty ? widget.initialName : name,
+                        photoPath: _photoPath,
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    child: Text(
+                      'Save',
+                      textAlign: TextAlign.center,
+                      style: AppTheme.button.copyWith(fontSize: 15),
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -394,6 +672,133 @@ class _SettingToggleRow extends StatelessWidget {
             onChanged: onChanged,
             activeTrackColor: AppColors.secondaryAccent,
             activeThumbColor: AppColors.white,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// City picker for the Smart Goal's live weather. A simple dropdown of PH
+/// cities; "Live"/"Offline" tells the user whether the temperature shown is
+/// from the real API or the offline fallback.
+class _CityRow extends StatelessWidget {
+  const _CityRow({
+    required this.city,
+    required this.live,
+    required this.onChanged,
+  });
+
+  final String city;
+  final bool live;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.place_rounded,
+              size: 20,
+              color: AppColors.primaryContainer,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Location',
+                  style: AppTheme.labelBold.copyWith(
+                    fontSize: 15,
+                    color: AppColors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  live ? 'Live temperature' : 'Offline estimate',
+                  style: AppTheme.bodyMd.copyWith(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          // A compact menu anchored right under the pill, instead of the default
+          // DropdownButton overlay — which expanded into a large floating list
+          // that covered the screen and didn't read as a dropdown.
+          PopupMenuButton<String>(
+            initialValue: city,
+            onSelected: onChanged,
+            position: PopupMenuPosition.under,
+            offset: const Offset(0, 6),
+            color: AppColors.white,
+            elevation: 8,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            itemBuilder: (context) => [
+              for (final c in kPhCities)
+                PopupMenuItem<String>(
+                  value: c.name,
+                  height: 44,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          c.name,
+                          style: AppTheme.labelBold.copyWith(
+                            fontSize: 14,
+                            color: c.name == city
+                                ? AppColors.secondaryAccent
+                                : AppColors.onSurface,
+                          ),
+                        ),
+                      ),
+                      if (c.name == city)
+                        const Icon(
+                          Icons.check_rounded,
+                          size: 18,
+                          color: AppColors.secondaryAccent,
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+            // The visible control: city name + a dropdown arrow in a soft pill.
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    city,
+                    style: AppTheme.labelBold.copyWith(
+                      fontSize: 14,
+                      color: AppColors.onSurface,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.arrow_drop_down_rounded,
+                    size: 22,
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
-import 'screens/sign_in_screen.dart';
+import 'screens/splash_screen.dart';
 import 'services/settings_repository.dart';
 import 'state/environment_theme.dart';
 
@@ -23,7 +23,7 @@ class HydroTrackerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       scrollBehavior: const _NoStretchScrollBehavior(),
-      home: const SignInScreen(),
+      home: const SplashScreen(),
     );
   }
 }

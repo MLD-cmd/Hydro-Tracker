@@ -404,10 +404,26 @@ class _TodaySummary extends StatelessWidget {
 /// The Today view's centrepiece: a connected timeline of each drink logged
 /// today, earliest first, so you can see *when* you hydrate. Read-only — manage
 /// or delete entries from the Hydration Log in Settings.
-class _TodayTimelineCard extends StatelessWidget {
+///
+/// Past [_maxRowsBeforeScroll] drinks the list stops growing and scrolls inside
+/// its own bounded area, so a busy day doesn't push the rest of the Stats page
+/// far down.
+class _TodayTimelineCard extends StatefulWidget {
   const _TodayTimelineCard({required this.entries});
 
   final List<WaterEntry> entries; // chronological, earliest first
+
+  @override
+  State<_TodayTimelineCard> createState() => _TodayTimelineCardState();
+}
+
+class _TodayTimelineCardState extends State<_TodayTimelineCard> {
+  // Above this many drinks the list collapses to the first [_collapsedCount]
+  // rows behind a "Show all" toggle, so a busy day doesn't push the rest of the
+  // Stats page far down. Tapping expands it inline (no nested scrolling).
+  static const _collapsedCount = 6;
+
+  bool _expanded = false;
 
   String _time(DateTime t) {
     final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
@@ -418,6 +434,11 @@ class _TodayTimelineCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final entries = widget.entries;
+    final canCollapse = entries.length > _collapsedCount;
+    final visibleCount =
+        (canCollapse && !_expanded) ? _collapsedCount : entries.length;
+
     return SoftCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -444,14 +465,53 @@ class _TodayTimelineCard extends StatelessWidget {
                 ),
               ),
             )
-          else
-            for (var i = 0; i < entries.length; i++)
+          else ...[
+            for (var i = 0; i < visibleCount; i++)
               _timelineRow(
                 entries[i],
                 isFirst: i == 0,
+                // Based on the full list: while collapsed, the last visible row
+                // isn't the real last, so its connector keeps running — which
+                // reads as "there's more below".
                 isLast: i == entries.length - 1,
               ),
+            if (canCollapse) _showToggle(visibleCount, entries.length),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _showToggle(int visibleCount, int total) {
+    final showingAll = visibleCount >= total;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                showingAll ? 'Show less' : 'Show all $total',
+                style: AppTheme.labelBold.copyWith(
+                  fontSize: 13,
+                  color: AppColors.secondaryAccent,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                showingAll
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+                size: 20,
+                color: AppColors.secondaryAccent,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
