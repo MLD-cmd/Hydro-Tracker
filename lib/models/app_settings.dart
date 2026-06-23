@@ -1,3 +1,5 @@
+import 'activity_level.dart';
+
 /// User-tunable app settings, persisted on the device.
 class AppSettings {
   const AppSettings({
@@ -10,6 +12,12 @@ class AppSettings {
     this.weatherCity = 'Manila',
     this.onboarded = false,
     this.profilePhotoPath,
+    this.avatarUrl,
+    this.weightKg,
+    this.activityLevel = ActivityLevel.sedentary,
+    this.reminderStartHour = 8,
+    this.reminderEndHour = 20,
+    this.reminderIntervalHours = 2,
   });
 
   /// The goal the user set by hand. The *effective* goal may be higher when
@@ -27,9 +35,28 @@ class AppSettings {
   /// Whether the one-time onboarding has been completed.
   final bool onboarded;
 
-  /// Absolute path to the user's chosen profile photo, or null for the initials
-  /// avatar.
+  /// Absolute path to the user's chosen profile photo on *this device*, or null
+  /// for the initials avatar. Used for instant/offline display; the canonical
+  /// cross-device copy is [avatarUrl] (Supabase Storage).
   final String? profilePhotoPath;
+
+  /// Public URL of the photo in the Supabase `avatars` bucket, or null. This is
+  /// what makes the avatar follow the account to a new device, where there's no
+  /// local file. Display prefers the local file when present, else this URL.
+  final String? avatarUrl;
+
+  /// Body weight in kilograms, used to suggest a personalised goal. Null until
+  /// the user enters it.
+  final double? weightKg;
+
+  /// The user's activity level, feeding the personalised goal suggestion.
+  final ActivityLevel activityLevel;
+
+  /// Reminder window + spacing (whole hours, 0–23). Drive the generated
+  /// notification times — see [reminderHours].
+  final int reminderStartHour;
+  final int reminderEndHour;
+  final int reminderIntervalHours;
 
   AppSettings copyWith({
     int? baseGoalMl,
@@ -41,6 +68,12 @@ class AppSettings {
     String? weatherCity,
     bool? onboarded,
     String? profilePhotoPath,
+    String? avatarUrl,
+    double? weightKg,
+    ActivityLevel? activityLevel,
+    int? reminderStartHour,
+    int? reminderEndHour,
+    int? reminderIntervalHours,
     bool removePhoto = false,
   }) {
     return AppSettings(
@@ -54,6 +87,13 @@ class AppSettings {
       onboarded: onboarded ?? this.onboarded,
       profilePhotoPath:
           removePhoto ? null : (profilePhotoPath ?? this.profilePhotoPath),
+      avatarUrl: removePhoto ? null : (avatarUrl ?? this.avatarUrl),
+      weightKg: weightKg ?? this.weightKg,
+      activityLevel: activityLevel ?? this.activityLevel,
+      reminderStartHour: reminderStartHour ?? this.reminderStartHour,
+      reminderEndHour: reminderEndHour ?? this.reminderEndHour,
+      reminderIntervalHours:
+          reminderIntervalHours ?? this.reminderIntervalHours,
     );
   }
 
@@ -67,6 +107,12 @@ class AppSettings {
     'weatherCity': weatherCity,
     'onboarded': onboarded,
     'profilePhotoPath': profilePhotoPath,
+    'avatarUrl': avatarUrl,
+    'weightKg': weightKg,
+    'activityLevel': activityLevel.key,
+    'reminderStartHour': reminderStartHour,
+    'reminderEndHour': reminderEndHour,
+    'reminderIntervalHours': reminderIntervalHours,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -79,5 +125,11 @@ class AppSettings {
     weatherCity: (json['weatherCity'] as String?) ?? 'Manila',
     onboarded: (json['onboarded'] as bool?) ?? false,
     profilePhotoPath: json['profilePhotoPath'] as String?,
+    avatarUrl: json['avatarUrl'] as String?,
+    weightKg: (json['weightKg'] as num?)?.toDouble(),
+    activityLevel: activityLevelFromKey(json['activityLevel'] as String?),
+    reminderStartHour: (json['reminderStartHour'] as int?) ?? 8,
+    reminderEndHour: (json['reminderEndHour'] as int?) ?? 20,
+    reminderIntervalHours: (json['reminderIntervalHours'] as int?) ?? 2,
   );
 }

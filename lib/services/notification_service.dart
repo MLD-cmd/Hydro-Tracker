@@ -2,6 +2,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+import 'reminder_schedule.dart';
 
 /// Wraps flutter_local_notifications to deliver the hydration reminders the
 /// Settings toggles control. Reminders fire daily at waking hours; "Quiet
@@ -56,6 +57,9 @@ class NotificationService {
   Future<void> applyReminders({
     required bool enabled,
     required bool quietHours,
+    int startHour = 8,
+    int endHour = 20,
+    int intervalHours = 2,
   }) async {
     await init();
     await _plugin.cancelAll();
@@ -71,10 +75,14 @@ class NotificationService {
       notificationDetails: _details,
     );
 
-    // Daily reminders at waking hours; Quiet Hours keeps them mid-day.
-    final hours = quietHours
-        ? const [9, 12, 15, 18]
-        : const [8, 10, 12, 14, 16, 18, 20];
+    // Daily reminders generated from the user's chosen window + spacing; Quiet
+    // Hours narrows the window to mid-day.
+    final hours = reminderHours(
+      startHour: startHour,
+      endHour: endHour,
+      intervalHours: intervalHours,
+      quietHours: quietHours,
+    );
     var id = 100;
     for (final hour in hours) {
       await _plugin.zonedSchedule(

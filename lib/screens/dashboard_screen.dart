@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,8 +7,12 @@ import '../theme/app_theme.dart';
 import '../models/achievement.dart';
 import '../models/app_settings.dart';
 import '../models/drink_type.dart';
+import '../services/auth_service.dart';
+import '../services/drink_catalog.dart';
+import '../services/drink_type_repository.dart';
 import '../services/hydration_repository.dart';
 import '../services/notification_service.dart';
+import '../services/profile_repository.dart';
 import '../services/settings_repository.dart';
 import '../services/weather_service.dart';
 import '../state/environment_theme.dart';
@@ -35,6 +40,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // Hydration data and settings are persisted on the device (no backend yet).
   final HydrationRepository _repo = HydrationRepository();
   final SettingsRepository _settingsRepo = SettingsRepository();
+  final ProfileRepository _profileRepo = ProfileRepository();
+  final DrinkTypeRepository _drinkRepo = DrinkTypeRepository();
+  DrinkCatalog _catalog = const DrinkCatalog();
   static const WeatherService _weather = WeatherService();
 
   AppSettings _settings = const AppSettings();
@@ -65,15 +73,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadData() async {
     await Future.wait([_repo.load(), _settingsRepo.load()]);
+    // Best-effort load of the user's custom drinks (built-ins always present).
+    final custom = await _drinkRepo.fetchAll();
+    if (custom != null) _catalog = DrinkCatalog(custom: custom);
+    var settings = _settingsRepo.settings;
+    // Prefer the signed-in user's cloud profile (real name, goal, theme…) over
+    // the local defaults. Falls back to local when offline / signed out.
+    final cloud = await _profileRepo.fetch();
+    if (cloud != null) {
+      settings = cloud.copyWith(
+        // onboarding is a per-device UX flag — don't let a fresh cloud row
+        // (onboarded=false) re-trigger onboarding once done locally.
+        onboarded: settings.onboarded || cloud.onboarded,
+        // Keep the device's local photo file for instant/offline display; the
+        // cloud avatarUrl (from cloud) is the fallback when there's no local
+        // file (e.g. a fresh device), handled by the avatar display widgets.
+        profilePhotoPath: settings.profilePhotoPath,
+      );
+      await _settingsRepo.save(settings); // cache locally
+      await _profileRepo.save(settings); // push merged values (e.g. onboarded)
+    }
     if (!mounted) return;
+    environmentThemeIndex.value = settings.themeIndex;
     setState(() {
-      _settings = _settingsRepo.settings;
+      _settings = settings;
       _loading = false;
     });
     // Sync scheduled reminders with the saved preference.
     NotificationService.instance.applyReminders(
       enabled: _settings.reminders,
       quietHours: _settings.quietHours,
+      startHour: _settings.reminderStartHour,
+      endHour: _settings.reminderEndHour,
+      intervalHours: _settings.reminderIntervalHours,
     );
     // Replace the simulated weather with the live temperature for the saved
     // city. Fire-and-forget: the UI already has a usable value to show.
@@ -185,26 +217,88 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _updateSettings(AppSettings next) async {
     final remindersChanged =
         next.reminders != _settings.reminders ||
-        next.quietHours != _settings.quietHours;
+        next.quietHours != _settings.quietHours ||
+        next.reminderStartHour != _settings.reminderStartHour ||
+        next.reminderEndHour != _settings.reminderEndHour ||
+        next.reminderIntervalHours != _settings.reminderIntervalHours;
     final cityChanged = next.weatherCity != _settings.weatherCity;
-    await _settingsRepo.save(next);
-    environmentThemeIndex.value = next.themeIndex;
-    if (mounted) setState(() => _settings = next);
+
+    // When the photo changed, sync it to Storage: upload a newly picked file and
+    // capture its URL, or clear the cloud avatar when the photo was removed.
+    var toSave = next;
+    if (next.profilePhotoPath != _settings.profilePhotoPath) {
+      if (next.profilePhotoPath != null) {
+        final url = await _profileRepo.uploadAvatar(
+          File(next.profilePhotoPath!),
+        );
+        if (url != null) toSave = next.copyWith(avatarUrl: url);
+      } else {
+        await _profileRepo.removeAvatar();
+        toSave = next.copyWith(removePhoto: true); // also clears avatarUrl
+      }
+    }
+
+    await _settingsRepo.save(toSave);
+    // Mirror the change to the user's cloud profile (best-effort).
+    await _profileRepo.save(toSave);
+    environmentThemeIndex.value = toSave.themeIndex;
+    if (mounted) setState(() => _settings = toSave);
     if (remindersChanged) {
       NotificationService.instance.applyReminders(
         enabled: next.reminders,
         quietHours: next.quietHours,
+        startHour: next.reminderStartHour,
+        endHour: next.reminderEndHour,
+        intervalHours: next.reminderIntervalHours,
       );
     }
     // Picking a new city re-pulls the live temperature for that place.
     if (cityChanged) _refreshWeather();
   }
 
+  Future<void> _openManageDrinks() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ManageDrinksScreen(
+          custom: _catalog.custom,
+          onAdd: (name, hydration, iconKey, colorHex) async {
+            final created = await _drinkRepo.insert(
+              name: name,
+              hydration: hydration,
+              iconKey: iconKey,
+              colorHex: colorHex,
+            );
+            if (created != null) {
+              setState(() {
+                _catalog = DrinkCatalog(custom: [..._catalog.custom, created]);
+              });
+            }
+            return created;
+          },
+          onDelete: (drink) async {
+            if (drink.id != null) await _drinkRepo.delete(drink.id!);
+            setState(() {
+              _catalog = DrinkCatalog(
+                custom:
+                    _catalog.custom.where((d) => d.id != drink.id).toList(),
+              );
+            });
+          },
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   void _openHistory() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            HistoryScreen(repo: _repo, onChanged: () => setState(() {})),
+        builder: (_) => HistoryScreen(
+          repo: _repo,
+          goalMl: _effectiveGoal,
+          catalog: _catalog,
+          onChanged: () => setState(() {}),
+        ),
       ),
     );
   }
@@ -230,8 +324,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return '${diff.inDays}d ago';
   }
 
-  void _logout() {
-    // No backend yet — just return to the Sign In screen.
+  Future<void> _logout() async {
+    await AuthService.instance.signOut();
+    // Clear cached logs so the next account on a shared device starts clean.
+    await _repo.clear();
+    if (!mounted) return;
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const SignInScreen()));
@@ -257,6 +354,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           index: _tabIndex,
           children: [
             _HomeTab(
+              catalog: _catalog,
               currentMl: _repo.todayTotal,
               targetMl: goal,
               smartGoalActive: _settings.smartGoal,
@@ -278,9 +376,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               weeklyTotals: _repo.last7Days(),
               monthlyTotals: _repo.lastNDays(30),
               todayEntries: _repo.todayEntries(),
+              hourlyTotals: _repo.todayByHour(),
               streak: _repo.currentStreak(goal),
               stats: _repo.statsFor(goal),
               onLogWater: () => setState(() => _tabIndex = 0),
+              onRefresh: _refresh,
             ),
             SettingsTab(
               settings: _settings,
@@ -288,7 +388,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               goalBump: _weather.goalBumpMl(_todayWeather),
               onSettingsChanged: _updateSettings,
               onOpenHistory: _openHistory,
+              onManageDrinks: _openManageDrinks,
               onLogout: _logout,
+              onRefresh: _refresh,
             ),
           ],
         ),
@@ -303,6 +405,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 class _HomeTab extends StatelessWidget {
   const _HomeTab({
+    required this.catalog,
     required this.currentMl,
     required this.targetMl,
     required this.smartGoalActive,
@@ -319,6 +422,7 @@ class _HomeTab extends StatelessWidget {
     required this.onRefresh,
   });
 
+  final DrinkCatalog catalog;
   final int currentMl;
   final int targetMl;
   final bool smartGoalActive;
@@ -374,30 +478,33 @@ class _HomeTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 32),
-          Row(
-            children: [
-              Expanded(
-                child: _InfoCard(
-                  icon: Icons.history_rounded,
-                  iconColor: AppColors.primaryContainer,
-                  title: 'Last Intake',
-                  value: lastIntakeLabel,
-                  detail: lastIntakeDetail,
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _InfoCard(
+                    icon: Icons.history_rounded,
+                    iconColor: AppColors.primaryContainer,
+                    title: 'Last Intake',
+                    value: lastIntakeLabel,
+                    detail: lastIntakeDetail,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _InfoCard(
-                  icon: Icons.local_fire_department_rounded,
-                  iconColor: AppColors.hibiscus,
-                  title: 'Daily Streak',
-                  value: streak == 1 ? '1 day' : '$streak days',
-                  detail: streak == 0
-                      ? 'Hit your goal today!'
-                      : 'Keep it going!',
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _InfoCard(
+                    icon: Icons.local_fire_department_rounded,
+                    iconColor: AppColors.hibiscus,
+                    title: 'Daily Streak',
+                    value: streak == 1 ? '1 day' : '$streak days',
+                    detail: streak == 0
+                        ? 'Hit your goal today!'
+                        : 'Keep it going!',
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           const SizedBox(height: 28),
           Center(
@@ -410,12 +517,16 @@ class _HomeTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _DrinkTypeSelector(selected: selectedType, onSelect: onSelectType),
+          _DrinkTypeSelector(
+            catalog: catalog,
+            selected: selectedType,
+            onSelect: onSelectType,
+          ),
           const SizedBox(height: 16),
           _CustomLogCard(type: selectedType, onLog: onLog),
           if (byType.isNotEmpty) ...[
             const SizedBox(height: 24),
-            _DrinkMixCard(byType: byType, nudge: nudge),
+            _DrinkMixCard(catalog: catalog, byType: byType, nudge: nudge),
           ],
         ],
         ),
@@ -430,8 +541,13 @@ class _HomeTab extends StatelessWidget {
 /// buddy's coffee-vs-water nudge: when the warning shows, you can see coffee's
 /// bar standing taller than water's.
 class _DrinkMixCard extends StatelessWidget {
-  const _DrinkMixCard({required this.byType, required this.nudge});
+  const _DrinkMixCard({
+    required this.catalog,
+    required this.byType,
+    required this.nudge,
+  });
 
+  final DrinkCatalog catalog;
   final Map<String, int> byType;
   final HydrationNudge? nudge;
 
@@ -439,7 +555,7 @@ class _DrinkMixCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = byType.values.fold(0, (sum, v) => sum + v);
     final shown =
-        kDrinkTypes.where((t) => (byType[t.name] ?? 0) > 0).toList();
+        catalog.all.where((t) => (byType[t.name] ?? 0) > 0).toList();
 
     return SoftCard(
       child: Column(
@@ -590,26 +706,54 @@ class _MixBar extends StatelessWidget {
 /// The chosen type colours the quick-log cards and is what gets logged; it only
 /// changes what the next tap records and never resets the day's total.
 class _DrinkTypeSelector extends StatelessWidget {
-  const _DrinkTypeSelector({required this.selected, required this.onSelect});
+  const _DrinkTypeSelector({
+    required this.catalog,
+    required this.selected,
+    required this.onSelect,
+  });
 
+  final DrinkCatalog catalog;
   final DrinkType selected;
   final ValueChanged<DrinkType> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        for (var i = 0; i < kDrinkTypes.length; i++) ...[
-          if (i > 0) const SizedBox(width: 8),
-          Expanded(
-            child: _DrinkSegment(
-              type: kDrinkTypes[i],
-              selected: kDrinkTypes[i].name == selected.name,
-              onTap: () => onSelect(kDrinkTypes[i]),
+    final types = catalog.all;
+    // Up to 5 fit as equal-width segments; beyond that, scroll horizontally so
+    // custom drinks never cramp or clip the row.
+    if (types.length <= 5) {
+      return Row(
+        children: [
+          for (var i = 0; i < types.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(
+              child: _DrinkSegment(
+                type: types[i],
+                selected: types[i].name == selected.name,
+                onTap: () => onSelect(types[i]),
+              ),
             ),
-          ),
+          ],
         ],
-      ],
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < types.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            SizedBox(
+              width: 84,
+              child: _DrinkSegment(
+                type: types[i],
+                selected: types[i].name == selected.name,
+                onTap: () => onSelect(types[i]),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -751,26 +895,32 @@ class _InfoCard extends StatelessWidget {
     return SoftCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, size: 18, color: iconColor),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  title,
-                  style: AppTheme.bodyMd.copyWith(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.onSurface,
+              Row(
+                children: [
+                  Icon(icon, size: 18, color: iconColor),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: AppTheme.bodyMd.copyWith(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.onSurface,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
+              const SizedBox(height: 14),
+              Text(value, style: AppTheme.headlineLg.copyWith(fontSize: 24)),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(value, style: AppTheme.headlineLg.copyWith(fontSize: 24)),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(detail, style: AppTheme.bodyMd.copyWith(fontSize: 13)),
         ],
       ),

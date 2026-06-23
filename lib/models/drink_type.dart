@@ -9,16 +9,66 @@ class DrinkType {
     required this.icon,
     required this.color,
     required this.hydration,
+    this.id,
+    this.iconKey,
   });
 
+  /// Builds a user-defined drink from persisted primitives (icon key + hex).
+  factory DrinkType.custom({
+    required String id,
+    required String name,
+    required double hydration,
+    required String iconKey,
+    required String colorHex,
+  }) {
+    return DrinkType(
+      id: id,
+      name: name,
+      hydration: hydration,
+      iconKey: iconKey,
+      icon: iconForKey(iconKey),
+      color: _colorFromHex(colorHex),
+    );
+  }
+
+  /// Null for the built-in catalogue; the Supabase row id for custom drinks.
+  final String? id;
   final String name;
   final IconData icon;
   final Color color;
   final double hydration; // multiplier applied to the raw millilitres
 
+  /// The stored icon key for custom drinks (null for built-ins).
+  final String? iconKey;
+
+  bool get isCustom => id != null;
+
   /// Effective hydrating millilitres for a raw [amountMl] of this drink.
   int effective(int amountMl) => (amountMl * hydration).round();
 }
+
+/// Parses a 6-hex-digit RRGGBB string into an opaque Color.
+Color _colorFromHex(String hex) {
+  final value = int.tryParse(hex, radix: 16) ?? 0x4FC3F7;
+  return Color(0xFF000000 | value);
+}
+
+/// The fixed set of icons a custom drink may use (key -> IconData). Storing a
+/// key (not an IconData) is what lets custom drinks round-trip through Supabase.
+const Map<String, IconData> _iconByKey = {
+  'water_drop': Icons.water_drop_rounded,
+  'local_drink': Icons.local_drink_rounded,
+  'local_bar': Icons.local_bar_rounded,
+  'coffee': Icons.local_cafe_rounded,
+  'tea': Icons.emoji_food_beverage_rounded,
+  'sports': Icons.sports_bar_rounded,
+  'bubble': Icons.bubble_chart_rounded,
+};
+
+List<String> get drinkIconKeys => _iconByKey.keys.toList();
+
+/// Resolves an icon key, defaulting to the first icon for unknown keys.
+IconData iconForKey(String key) => _iconByKey[key] ?? _iconByKey.values.first;
 
 const List<DrinkType> kDrinkTypes = [
   DrinkType(

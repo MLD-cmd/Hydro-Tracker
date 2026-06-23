@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import '../models/activity_level.dart';
 import '../models/app_settings.dart';
+import '../models/drink_type.dart';
+import '../services/goal_calculator.dart';
 import '../services/weather_service.dart';
 import '../state/environment_theme.dart';
 import '../theme/app_theme.dart';
@@ -20,7 +23,9 @@ class SettingsTab extends StatelessWidget {
     required this.goalBump,
     required this.onSettingsChanged,
     required this.onOpenHistory,
+    required this.onManageDrinks,
     required this.onLogout,
+    required this.onRefresh,
   });
 
   final AppSettings settings;
@@ -28,7 +33,9 @@ class SettingsTab extends StatelessWidget {
   final int goalBump;
   final ValueChanged<AppSettings> onSettingsChanged;
   final VoidCallback onOpenHistory;
+  final VoidCallback onManageDrinks;
   final VoidCallback onLogout;
+  final Future<void> Function() onRefresh;
 
   String _litres(int ml) => '${(ml / 1000).toStringAsFixed(1)}L';
 
@@ -40,16 +47,27 @@ class SettingsTab extends StatelessWidget {
       builder: (_) => _EditProfileSheet(
         initialName: settings.userName,
         photoPath: settings.profilePhotoPath,
+        avatarUrl: settings.avatarUrl,
       ),
     );
     if (result == null) return;
-    onSettingsChanged(
-      settings.copyWith(
-        userName: result.name,
-        profilePhotoPath: result.photoPath,
-        removePhoto: result.photoPath == null,
-      ),
-    );
+    // Three cases: removed → clear photo + cloud avatar; a newly picked file →
+    // set the local path (dashboard uploads it); otherwise just the name (leave
+    // the photo untouched, so editing the name never wipes a cloud-only avatar).
+    if (result.removed) {
+      onSettingsChanged(
+        settings.copyWith(userName: result.name, removePhoto: true),
+      );
+    } else if (result.photoPath != null) {
+      onSettingsChanged(
+        settings.copyWith(
+          userName: result.name,
+          profilePhotoPath: result.photoPath,
+        ),
+      );
+    } else {
+      onSettingsChanged(settings.copyWith(userName: result.name));
+    }
   }
 
   @override
@@ -57,10 +75,14 @@ class SettingsTab extends StatelessWidget {
     final effectiveGoal =
         settings.baseGoalMl + (settings.smartGoal ? goalBump : 0);
 
-    return SingleChildScrollView(
-      key: const PageStorageKey('settings_scroll'),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-      child: Column(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      color: AppColors.secondaryAccent,
+      child: SingleChildScrollView(
+        key: const PageStorageKey('settings_scroll'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
@@ -74,6 +96,7 @@ class SettingsTab extends StatelessWidget {
           _ProfileCard(
             name: settings.userName,
             photoPath: settings.profilePhotoPath,
+            avatarUrl: settings.avatarUrl,
             dailyGoal: _litres(settings.baseGoalMl),
             onEdit: () => _openEditProfile(context),
           ),
@@ -84,6 +107,17 @@ class SettingsTab extends StatelessWidget {
             goalMl: settings.baseGoalMl,
             onChanged: (ml) =>
                 onSettingsChanged(settings.copyWith(baseGoalMl: ml)),
+          ),
+          const SizedBox(height: 12),
+          _PersonalizedGoalCard(
+            weightKg: settings.weightKg,
+            activity: settings.activityLevel,
+            currentGoalMl: settings.baseGoalMl,
+            onChanged: (weightKg, activity) => onSettingsChanged(
+              settings.copyWith(weightKg: weightKg, activityLevel: activity),
+            ),
+            onUseRecommended: (goalMl) =>
+                onSettingsChanged(settings.copyWith(baseGoalMl: goalMl)),
           ),
           const SizedBox(height: 12),
           SoftCard(
@@ -134,6 +168,31 @@ class SettingsTab extends StatelessWidget {
                   onChanged: (v) =>
                       onSettingsChanged(settings.copyWith(quietHours: v)),
                 ),
+                if (settings.reminders) ...[
+                  const Divider(height: 1, indent: 56),
+                  _ReminderScheduleRow(
+                    label: 'Start',
+                    hour: settings.reminderStartHour,
+                    onChanged: (h) => onSettingsChanged(
+                      settings.copyWith(reminderStartHour: h),
+                    ),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  _ReminderScheduleRow(
+                    label: 'End',
+                    hour: settings.reminderEndHour,
+                    onChanged: (h) => onSettingsChanged(
+                      settings.copyWith(reminderEndHour: h),
+                    ),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  _ReminderIntervalRow(
+                    intervalHours: settings.reminderIntervalHours,
+                    onChanged: (i) => onSettingsChanged(
+                      settings.copyWith(reminderIntervalHours: i),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -190,11 +249,95 @@ class SettingsTab extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+          SoftCard(
+            onTap: onManageDrinks,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.local_cafe_rounded,
+                    size: 20,
+                    color: AppColors.primaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    'Manage Drinks',
+                    style: AppTheme.labelBold.copyWith(fontSize: 15),
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 28),
           _LogoutCard(onTap: onLogout),
         ],
+        ),
       ),
     );
+  }
+}
+
+/// Renders a profile photo with graceful fallback: the on-device file first
+/// (instant, works offline), then the cloud [avatarUrl] (e.g. on a fresh
+/// device), then the [initials] placeholder.
+class _AvatarContent extends StatelessWidget {
+  const _AvatarContent({
+    required this.photoPath,
+    required this.avatarUrl,
+    required this.initials,
+    required this.size,
+    required this.fontSize,
+  });
+
+  final String? photoPath;
+  final String? avatarUrl;
+  final String initials;
+  final double size;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final initialsWidget = Text(
+      initials,
+      style: AppTheme.headlineLg.copyWith(
+        fontSize: fontSize,
+        color: AppColors.onPrimary,
+      ),
+    );
+
+    if (photoPath != null && File(photoPath!).existsSync()) {
+      return Image.file(
+        File(photoPath!),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+      );
+    }
+    if (avatarUrl != null && avatarUrl!.isNotEmpty) {
+      return Image.network(
+        avatarUrl!,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        // Fall back to initials if the URL fails to load (offline / deleted).
+        errorBuilder: (_, e, s) => initialsWidget,
+      );
+    }
+    return initialsWidget;
   }
 }
 
@@ -202,12 +345,14 @@ class _ProfileCard extends StatelessWidget {
   const _ProfileCard({
     required this.name,
     required this.photoPath,
+    required this.avatarUrl,
     required this.dailyGoal,
     required this.onEdit,
   });
 
   final String name;
   final String? photoPath;
+  final String? avatarUrl;
   final String dailyGoal;
   final VoidCallback onEdit;
 
@@ -221,7 +366,6 @@ class _ProfileCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasPhoto = photoPath != null && File(photoPath!).existsSync();
     return SizedBox(
       width: double.infinity,
       child: SoftCard(
@@ -245,20 +389,13 @@ class _ProfileCard extends StatelessWidget {
                     ),
                     alignment: Alignment.center,
                     clipBehavior: Clip.antiAlias,
-                    child: hasPhoto
-                        ? Image.file(
-                            File(photoPath!),
-                            width: 88,
-                            height: 88,
-                            fit: BoxFit.cover,
-                          )
-                        : Text(
-                            _initials,
-                            style: AppTheme.headlineLg.copyWith(
-                              fontSize: 30,
-                              color: AppColors.onPrimary,
-                            ),
-                          ),
+                    child: _AvatarContent(
+                      photoPath: photoPath,
+                      avatarUrl: avatarUrl,
+                      initials: _initials,
+                      size: 88,
+                      fontSize: 30,
+                    ),
                   ),
                   Positioned(
                     right: 0,
@@ -299,22 +436,32 @@ class _ProfileCard extends StatelessWidget {
   }
 }
 
-/// The result returned by [_EditProfileSheet]: the new name and photo path
-/// (null means "no photo / removed").
+/// The result returned by [_EditProfileSheet]: the new name, a newly picked
+/// photo path (null = unchanged), and whether the photo was explicitly removed.
 class _ProfileEdit {
-  const _ProfileEdit({required this.name, required this.photoPath});
+  const _ProfileEdit({
+    required this.name,
+    required this.photoPath,
+    required this.removed,
+  });
 
   final String name;
   final String? photoPath;
+  final bool removed;
 }
 
 /// A bottom sheet for editing the profile: tap the avatar to pick a photo from
 /// the gallery, edit the display name, then save.
 class _EditProfileSheet extends StatefulWidget {
-  const _EditProfileSheet({required this.initialName, required this.photoPath});
+  const _EditProfileSheet({
+    required this.initialName,
+    required this.photoPath,
+    required this.avatarUrl,
+  });
 
   final String initialName;
   final String? photoPath;
+  final String? avatarUrl;
 
   @override
   State<_EditProfileSheet> createState() => _EditProfileSheetState();
@@ -324,6 +471,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
   late final TextEditingController _name =
       TextEditingController(text: widget.initialName);
   String? _photoPath;
+  // Set when the user taps "Remove photo" — distinguishes "no change" from an
+  // explicit removal (which must also clear the cloud avatar).
+  bool _removed = false;
+
   bool _picking = false;
 
   @override
@@ -362,7 +513,12 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
         final dest =
             '${dir.path}/profile_${DateTime.now().millisecondsSinceEpoch}.$ext';
         await File(file.path).copy(dest);
-        if (mounted) setState(() => _photoPath = dest);
+        if (mounted) {
+          setState(() {
+            _photoPath = dest;
+            _removed = false;
+          });
+        }
       }
     } catch (_) {
       // Picker cancelled or failed — nothing to do.
@@ -373,7 +529,13 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    // A photo is shown if there's a local file or a cloud avatar that wasn't
+    // just removed — drives the avatar art and the "Remove photo" affordance.
+    final hasLocal = _photoPath != null && File(_photoPath!).existsSync();
+    final hasCloud = !_removed &&
+        widget.avatarUrl != null &&
+        widget.avatarUrl!.isNotEmpty;
+    final hasPhoto = hasLocal || hasCloud;
     return Padding(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
@@ -419,20 +581,13 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                               valueColor:
                                   AlwaysStoppedAnimation(AppColors.onPrimary),
                             )
-                          : hasPhoto
-                              ? Image.file(
-                                  File(_photoPath!),
-                                  width: 100,
-                                  height: 100,
-                                  fit: BoxFit.cover,
-                                )
-                              : Text(
-                                  _initials,
-                                  style: AppTheme.headlineLg.copyWith(
-                                    fontSize: 34,
-                                    color: AppColors.onPrimary,
-                                  ),
-                                ),
+                          : _AvatarContent(
+                              photoPath: hasLocal ? _photoPath : null,
+                              avatarUrl: hasCloud ? widget.avatarUrl : null,
+                              initials: _initials,
+                              size: 100,
+                              fontSize: 34,
+                            ),
                     ),
                     Positioned(
                       right: 0,
@@ -459,7 +614,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
             const SizedBox(height: 8),
             if (hasPhoto)
               TextButton(
-                onPressed: () => setState(() => _photoPath = null),
+                onPressed: () => setState(() {
+                  _photoPath = null;
+                  _removed = true;
+                }),
                 child: Text(
                   'Remove photo',
                   style: AppTheme.labelBold.copyWith(
@@ -502,6 +660,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                       _ProfileEdit(
                         name: name.isEmpty ? widget.initialName : name,
                         photoPath: _photoPath,
+                        removed: _removed,
                       ),
                     );
                   },
@@ -886,6 +1045,455 @@ class _Dot extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.white.withValues(alpha: 0.85),
         shape: BoxShape.circle,
+      ),
+    );
+  }
+}
+
+/// Lets the user enter weight + activity to get a recommended daily goal, then
+/// apply it to [baseGoalMl] with one tap. The manual stepper above stays the
+/// source of truth — this only *suggests* a value (recommend-and-override).
+class _PersonalizedGoalCard extends StatelessWidget {
+  const _PersonalizedGoalCard({
+    required this.weightKg,
+    required this.activity,
+    required this.currentGoalMl,
+    required this.onChanged,
+    required this.onUseRecommended,
+  });
+
+  final double? weightKg;
+  final ActivityLevel activity;
+  final int currentGoalMl;
+  final void Function(double? weightKg, ActivityLevel activity) onChanged;
+  final ValueChanged<int> onUseRecommended;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasWeight = weightKg != null && weightKg! > 0;
+    final recommended = hasWeight
+        ? recommendedGoalMl(weightKg: weightKg!, activity: activity)
+        : null;
+
+    return SoftCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Personalized goal',
+            style: AppTheme.labelBold.copyWith(
+              fontSize: 15,
+              color: AppColors.onSurface,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'From your weight and activity',
+            style: AppTheme.bodyMd.copyWith(fontSize: 12),
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            initialValue: hasWeight
+                ? weightKg!.toStringAsFixed(weightKg! % 1 == 0 ? 0 : 1)
+                : '',
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Weight (kg)',
+              isDense: true,
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            onChanged: (raw) {
+              final parsed = double.tryParse(raw.trim());
+              onChanged(parsed, activity);
+            },
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final level in ActivityLevel.values)
+                ChoiceChip(
+                  label: Text(level.label),
+                  selected: level == activity,
+                  showCheckmark: false,
+                  onSelected: (_) => onChanged(weightKg, level),
+                  labelStyle: AppTheme.labelBold.copyWith(
+                    fontSize: 12,
+                    color: level == activity
+                        ? AppColors.onPrimary
+                        : AppColors.onSurface,
+                  ),
+                  backgroundColor: AppColors.surfaceContainer,
+                  selectedColor: AppColors.secondaryAccent,
+                  side: BorderSide.none,
+                ),
+            ],
+          ),
+          if (recommended != null) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Recommended: ${(recommended / 1000).toStringAsFixed(1)}L',
+                    style: AppTheme.labelBold.copyWith(
+                      fontSize: 13,
+                      color: AppColors.onSurface,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: recommended == currentGoalMl
+                      ? null
+                      : () => onUseRecommended(recommended),
+                  child: Text(
+                    recommended == currentGoalMl ? 'In use' : 'Use this',
+                    style: AppTheme.labelBold.copyWith(
+                      fontSize: 13,
+                      color: recommended == currentGoalMl
+                          ? AppColors.onSurfaceVariant
+                          : AppColors.secondaryAccent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A row that picks a whole-hour value (0–23) for the reminder window.
+class _ReminderScheduleRow extends StatelessWidget {
+  const _ReminderScheduleRow({
+    required this.label,
+    required this.hour,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int hour;
+  final ValueChanged<int> onChanged;
+
+  String _fmt(int h) {
+    final period = h < 12 ? 'AM' : 'PM';
+    final display = h % 12 == 0 ? 12 : h % 12;
+    return '$display:00 $period';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          const SizedBox(width: 56),
+          Expanded(
+            child: Text(
+              label,
+              style: AppTheme.labelBold.copyWith(
+                fontSize: 15,
+                color: AppColors.onSurface,
+              ),
+            ),
+          ),
+          PopupMenuButton<int>(
+            initialValue: hour,
+            onSelected: onChanged,
+            position: PopupMenuPosition.under,
+            color: AppColors.white,
+            itemBuilder: (context) => [
+              for (var h = 0; h < 24; h++)
+                PopupMenuItem<int>(value: h, child: Text(_fmt(h))),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _fmt(hour),
+                style: AppTheme.labelBold.copyWith(fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A row that picks how often (every N hours) reminders fire.
+class _ReminderIntervalRow extends StatelessWidget {
+  const _ReminderIntervalRow({
+    required this.intervalHours,
+    required this.onChanged,
+  });
+
+  final int intervalHours;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          const SizedBox(width: 56),
+          Expanded(
+            child: Text(
+              'Every',
+              style: AppTheme.labelBold.copyWith(
+                fontSize: 15,
+                color: AppColors.onSurface,
+              ),
+            ),
+          ),
+          PopupMenuButton<int>(
+            initialValue: intervalHours,
+            onSelected: onChanged,
+            position: PopupMenuPosition.under,
+            color: AppColors.white,
+            itemBuilder: (context) => [
+              for (final n in const [1, 2, 3, 4])
+                PopupMenuItem<int>(
+                  value: n,
+                  child: Text(n == 1 ? '1 hour' : '$n hours'),
+                ),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                intervalHours == 1 ? '1 hour' : '$intervalHours hours',
+                style: AppTheme.labelBold.copyWith(fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A simple screen listing the user's custom drinks with an add form and a
+/// delete action per row. Built-in drinks are shown as non-deletable.
+class ManageDrinksScreen extends StatefulWidget {
+  const ManageDrinksScreen({
+    super.key,
+    required this.custom,
+    required this.onAdd,
+    required this.onDelete,
+  });
+
+  final List<DrinkType> custom;
+  final Future<DrinkType?> Function(
+    String name,
+    double hydration,
+    String iconKey,
+    String colorHex,
+  ) onAdd;
+  final Future<void> Function(DrinkType drink) onDelete;
+
+  @override
+  State<ManageDrinksScreen> createState() => _ManageDrinksScreenState();
+}
+
+class _ManageDrinksScreenState extends State<ManageDrinksScreen> {
+  late final List<DrinkType> _custom = [...widget.custom];
+
+  Future<void> _openAddSheet() async {
+    final added = await showModalBottomSheet<DrinkType>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _AddDrinkSheet(onAdd: widget.onAdd),
+    );
+    if (added != null && mounted) setState(() => _custom.add(added));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Manage Drinks')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openAddSheet,
+        backgroundColor: AppColors.secondaryAccent,
+        child: const Icon(Icons.add_rounded, color: AppColors.white),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text('Built-in', style: AppTheme.labelBold),
+          const SizedBox(height: 8),
+          for (final t in kDrinkTypes)
+            ListTile(
+              leading: Icon(t.icon, color: t.color),
+              title: Text(t.name),
+              subtitle: Text('Hydration ${(t.hydration * 100).round()}%'),
+            ),
+          const SizedBox(height: 16),
+          Text('Your drinks', style: AppTheme.labelBold),
+          const SizedBox(height: 8),
+          if (_custom.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('No custom drinks yet. Tap + to add one.'),
+            ),
+          for (final t in _custom)
+            ListTile(
+              leading: Icon(t.icon, color: t.color),
+              title: Text(t.name),
+              subtitle: Text('Hydration ${(t.hydration * 100).round()}%'),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline_rounded),
+                onPressed: () async {
+                  await widget.onDelete(t);
+                  if (mounted) setState(() => _custom.remove(t));
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet to create a custom drink: name, hydration weight, icon, colour.
+class _AddDrinkSheet extends StatefulWidget {
+  const _AddDrinkSheet({required this.onAdd});
+
+  final Future<DrinkType?> Function(
+    String name,
+    double hydration,
+    String iconKey,
+    String colorHex,
+  ) onAdd;
+
+  @override
+  State<_AddDrinkSheet> createState() => _AddDrinkSheetState();
+}
+
+class _AddDrinkSheetState extends State<_AddDrinkSheet> {
+  final TextEditingController _name = TextEditingController();
+  double _hydration = 1.0;
+  String _iconKey = drinkIconKeys.first;
+  // A small fixed palette of hex options.
+  static const List<String> _palette = [
+    '4FC3F7', 'FF8A65', 'FFD54F', '81C784', 'BA68C8', 'F06292',
+  ];
+  String _colorHex = _palette.first;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty || _saving) return;
+    setState(() => _saving = true);
+    final created = await widget.onAdd(name, _hydration, _iconKey, _colorHex);
+    if (mounted) Navigator.of(context).pop(created);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 16,
+        bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('New drink', style: AppTheme.headlineLg.copyWith(fontSize: 18)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _name,
+            decoration: const InputDecoration(labelText: 'Name'),
+          ),
+          const SizedBox(height: 20),
+          Text('Hydration: ${(_hydration * 100).round()}%',
+              style: AppTheme.bodyMd),
+          Slider(
+            value: _hydration,
+            min: 0,
+            max: 1.2,
+            divisions: 12,
+            label: '${(_hydration * 100).round()}%',
+            onChanged: (v) => setState(() => _hydration = v),
+          ),
+          const SizedBox(height: 12),
+          Text('Icon', style: AppTheme.bodyMd),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final key in drinkIconKeys)
+                ChoiceChip(
+                  label: Icon(iconForKey(key), size: 20),
+                  selected: key == _iconKey,
+                  onSelected: (_) => setState(() => _iconKey = key),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('Colour', style: AppTheme.bodyMd),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final hex in _palette)
+                GestureDetector(
+                  onTap: () => setState(() => _colorHex = hex),
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Color(0xFF000000 | int.parse(hex, radix: 16)),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: hex == _colorHex
+                            ? AppColors.primary
+                            : Colors.transparent,
+                        width: 3,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: _saving ? null : _save,
+              child: Text(_saving ? 'Saving…' : 'Add drink'),
+            ),
+          ),
+        ],
       ),
     );
   }
