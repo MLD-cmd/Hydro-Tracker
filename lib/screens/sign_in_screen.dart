@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/auth_service.dart';
+import '../utils/validators.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/app_text_field.dart';
@@ -19,6 +22,13 @@ class _SignInScreenState extends State<SignInScreen> {
   final _passwordController = TextEditingController();
   bool _signingIn = false;
 
+  // Per-field inline errors. Null = no error shown.
+  String? _emailError;
+  String? _passwordError;
+  // Once the user has tried to submit once, re-validate live as they type so
+  // errors clear the moment they're fixed.
+  bool _submitted = false;
+
   @override
   void dispose() {
     _emailController.dispose();
@@ -26,16 +36,50 @@ class _SignInScreenState extends State<SignInScreen> {
     super.dispose();
   }
 
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Runs the field validators and updates the inline errors. Returns true when
+  /// everything passes.
+  bool _validate() {
+    setState(() {
+      _emailError = Validators.email(_emailController.text);
+      _passwordError = Validators.requiredPassword(_passwordController.text);
+    });
+    return _emailError == null && _passwordError == null;
+  }
+
+  void _revalidateIfSubmitted() {
+    if (_submitted) _validate();
+  }
+
   Future<void> _signIn() async {
     if (_signingIn) return;
+    setState(() => _submitted = true);
+    if (!_validate()) return;
+
     setState(() => _signingIn = true);
-    // No backend yet — briefly show a spinner so it feels like a real sign-in,
-    // then go to the dashboard.
-    await Future.delayed(const Duration(milliseconds: 900));
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
+    try {
+      await AuthService.instance.signIn(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+      );
+    } on AuthException catch (e) {
+      // Server-side errors (e.g. wrong credentials) aren't tied to one field,
+      // so they surface as a snackbar.
+      if (mounted) _toast(e.message);
+    } catch (_) {
+      if (mounted) _toast('Something went wrong. Please try again.');
+    } finally {
+      if (mounted) setState(() => _signingIn = false);
+    }
   }
 
   @override
@@ -64,6 +108,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
                 textInputAction: TextInputAction.next,
+                errorText: _emailError,
+                onChanged: (_) => _revalidateIfSubmitted(),
               ),
               const SizedBox(height: 20),
               AppTextField(
@@ -73,6 +119,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 controller: _passwordController,
                 obscurable: true,
                 textInputAction: TextInputAction.done,
+                errorText: _passwordError,
+                onChanged: (_) => _revalidateIfSubmitted(),
                 onSubmitted: (_) => _signIn(),
               ),
               const SizedBox(height: 12),

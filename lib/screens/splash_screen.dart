@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
 import '../services/settings_repository.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/gradient_background.dart';
+import 'dashboard_screen.dart';
 import 'onboarding_screen.dart';
 import 'sign_in_screen.dart';
 
@@ -43,12 +45,18 @@ class _SplashScreenState extends State<SplashScreen>
       Future.delayed(const Duration(milliseconds: 2000)),
     ]);
     if (!mounted) return;
-    final onboarded = repo.settings.onboarded;
+    // A restored Supabase session means the user is still signed in — skip
+    // straight to the app. Otherwise route by whether they've onboarded.
+    final Widget next;
+    if (AuthService.instance.isSignedIn) {
+      next = const DashboardScreen();
+    } else {
+      next = repo.settings.onboarded
+          ? const SignInScreen()
+          : const OnboardingScreen();
+    }
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) =>
-            onboarded ? const SignInScreen() : const OnboardingScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => next),
     );
   }
 

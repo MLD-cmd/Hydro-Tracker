@@ -99,7 +99,14 @@ class _CelebrationScaffoldState extends State<_CelebrationScaffold>
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
         _pieces ??= _buildConfetti(size);
-        return Stack(
+        // showGeneralDialog (unlike showDialog) inserts no Material, so without
+        // this the card's Text widgets fall back to Flutter's "no style"
+        // default and get painted with a yellow underline. A transparent
+        // Material gives them a proper default text style while keeping the
+        // confetti backdrop see-through.
+        return Material(
+          type: MaterialType.transparency,
+          child: Stack(
           children: [
             // Confetti fills the whole screen, behind everything.
             Positioned.fill(
@@ -123,6 +130,7 @@ class _CelebrationScaffoldState extends State<_CelebrationScaffold>
               ),
             ),
           ],
+          ),
         );
       },
     );

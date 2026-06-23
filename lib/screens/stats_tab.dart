@@ -21,9 +21,11 @@ class StatsTab extends StatefulWidget {
     required this.weeklyTotals,
     required this.monthlyTotals,
     required this.todayEntries,
+    required this.hourlyTotals,
     required this.streak,
     required this.stats,
     required this.onLogWater,
+    required this.onRefresh,
   });
 
   final int currentMl;
@@ -31,9 +33,11 @@ class StatsTab extends StatefulWidget {
   final List<DayTotal> weeklyTotals;
   final List<DayTotal> monthlyTotals;
   final List<WaterEntry> todayEntries;
+  final List<HourTotal> hourlyTotals;
   final int streak;
   final HydrationStats stats;
   final VoidCallback onLogWater;
+  final Future<void> Function() onRefresh;
 
   @override
   State<StatsTab> createState() => _StatsTabState();
@@ -68,10 +72,14 @@ class _StatsTabState extends State<StatsTab> {
         .clamp(0, 999)
         .round();
 
-    return SingleChildScrollView(
-      key: const PageStorageKey('stats_scroll'),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-      child: Column(
+    return RefreshIndicator(
+      onRefresh: widget.onRefresh,
+      color: AppColors.secondaryAccent,
+      child: SingleChildScrollView(
+        key: const PageStorageKey('stats_scroll'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
@@ -102,6 +110,11 @@ class _StatsTabState extends State<StatsTab> {
                 totalMl: widget.currentMl,
                 targetMl: widget.targetMl,
                 drinkCount: widget.todayEntries.length,
+                formatLitres: _formatLitres,
+              ),
+              const SizedBox(height: 16),
+              _HourlyChartCard(
+                hours: widget.hourlyTotals,
                 formatLitres: _formatLitres,
               ),
               const SizedBox(height: 16),
@@ -199,6 +212,7 @@ class _StatsTabState extends State<StatsTab> {
           const SizedBox(height: 28),
           const _HydrationHack(),
         ],
+        ),
       ),
     );
   }
@@ -780,6 +794,123 @@ class _Bar extends StatelessWidget {
                     : null,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Today's intake shaped across the 24 hours of the day — the *when* behind the
+/// daily total. Reuses [_Bar] so it matches the week/month chart, but drops the
+/// goal line (a per-hour goal is meaningless) and highlights the peak hour
+/// instead. Tap any bar to read that hour's exact amount.
+class _HourlyChartCard extends StatefulWidget {
+  const _HourlyChartCard({required this.hours, required this.formatLitres});
+
+  final List<HourTotal> hours;
+  final String Function(int) formatLitres;
+
+  @override
+  State<_HourlyChartCard> createState() => _HourlyChartCardState();
+}
+
+class _HourlyChartCardState extends State<_HourlyChartCard> {
+  int? _selected;
+
+  // Bars carrying an axis label, and the label shown beneath each.
+  static const _labelHours = {0: '12a', 6: '6a', 12: '12p', 18: '6p', 23: '11p'};
+
+  String _hourLabel(int hour) {
+    final period = hour < 12 ? 'AM' : 'PM';
+    final h12 = hour % 12 == 0 ? 12 : hour % 12;
+    return '$h12 $period';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hours = widget.hours;
+    final dayTotal = hours.fold(0, (s, h) => s + h.totalMl);
+    final maxHour = hours.fold(0, (m, h) => h.totalMl > m ? h.totalMl : m);
+    // Index of the busiest hour, so it can be highlighted. -1 when nothing yet.
+    final peakIndex = maxHour == 0
+        ? -1
+        : hours.indexWhere((h) => h.totalMl == maxHour);
+    final maxScale = maxHour == 0 ? 1 : maxHour * 1.15;
+    const chartHeight = 130.0;
+
+    final selected = _selected != null ? hours[_selected!] : null;
+
+    return SoftCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          selected != null
+              ? Text(
+                  '${_hourLabel(selected.hour)} · '
+                  '${selected.totalMl == 0 ? 'nothing logged' : widget.formatLitres(selected.totalMl)}'
+                  '${_selected == peakIndex && selected.totalMl > 0 ? ' · peak hour' : ''}',
+                  style: AppTheme.labelBold.copyWith(
+                    fontSize: 13,
+                    color: AppColors.secondaryAccent,
+                  ),
+                )
+              : Text(
+                  'Today by Hour',
+                  style: AppTheme.labelBold.copyWith(fontSize: 15),
+                ),
+          const SizedBox(height: 18),
+          if (dayTotal == 0)
+            SizedBox(
+              height: chartHeight,
+              child: Center(
+                child: Text(
+                  'No drinks logged yet today.',
+                  style: AppTheme.bodyMd.copyWith(fontSize: 13),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: chartHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < hours.length; i++)
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => setState(
+                          () => _selected = _selected == i ? null : i,
+                        ),
+                        child: _Bar(
+                          fraction: (hours[i].totalMl / maxScale)
+                              .clamp(0.0, 1.0)
+                              .toDouble(),
+                          maxHeight: chartHeight,
+                          isToday: false,
+                          isSelected: _selected == i,
+                          metGoal: i == peakIndex,
+                          horizontalPad: 1.5,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              for (final label in _labelHours.values)
+                Text(
+                  label,
+                  style: AppTheme.bodyMd.copyWith(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
           ),
         ],
       ),

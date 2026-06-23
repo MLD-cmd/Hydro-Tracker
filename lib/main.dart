@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config/supabase_config.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
 import 'services/settings_repository.dart';
@@ -6,6 +8,15 @@ import 'state/environment_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Connect to Supabase before the first frame. This restores any persisted
+  // session from disk, so a returning user is already signed in by splash time.
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    // Our key is the legacy JWT anon key (eyJ…), so `anonKey` is the right
+    // parameter; `publishableKey` is for the newer sb_publishable_… format.
+    // ignore: deprecated_member_use
+    anonKey: SupabaseConfig.anonKey,
+  );
   // Apply the saved environment theme before the first frame.
   final settings = SettingsRepository();
   await settings.load();

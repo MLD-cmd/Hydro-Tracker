@@ -13,6 +13,8 @@ class AppTextField extends StatefulWidget {
     this.obscurable = false,
     this.textInputAction,
     this.onSubmitted,
+    this.onChanged,
+    this.errorText,
   });
 
   final String label;
@@ -23,6 +25,10 @@ class AppTextField extends StatefulWidget {
   final bool obscurable;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
+  final ValueChanged<String>? onChanged;
+
+  /// When non-null, the field shows a red border and this message beneath it.
+  final String? errorText;
 
   @override
   State<AppTextField> createState() => _AppTextFieldState();
@@ -33,6 +39,7 @@ class _AppTextFieldState extends State<AppTextField> {
 
   @override
   Widget build(BuildContext context) {
+    final hasError = widget.errorText != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -43,7 +50,10 @@ class _AppTextFieldState extends State<AppTextField> {
             color: AppColors.surfaceContainerLow,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.5),
+              color: hasError
+                  ? AppColors.hibiscus
+                  : AppColors.outlineVariant.withValues(alpha: 0.5),
+              width: hasError ? 1.5 : 1,
             ),
             boxShadow: const [
               // Soft inset-like shadow for the "sunken well" feel.
@@ -65,6 +75,7 @@ class _AppTextFieldState extends State<AppTextField> {
             obscureText: _obscured,
             textInputAction: widget.textInputAction,
             onSubmitted: widget.onSubmitted,
+            onChanged: widget.onChanged,
             style: AppTheme.bodyMd.copyWith(color: AppColors.onSurface),
             decoration: InputDecoration(
               hintText: widget.hintText,
@@ -93,6 +104,29 @@ class _AppTextFieldState extends State<AppTextField> {
             ),
           ),
         ),
+        if (hasError)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 4),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  size: 14,
+                  color: AppColors.hibiscus,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    widget.errorText!,
+                    style: AppTheme.bodyMd.copyWith(
+                      fontSize: 12,
+                      color: AppColors.hibiscus,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
