@@ -43,3 +43,24 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Claude Code / local MCP tooling config (references the Supabase project)
+.mcp.json
+
+# AI-generated planning docs
+docs/superpowers/
+
+# Dart DevTools (auto-generated)
+devtools_options.yaml
+
+# Secrets / environment — never commit Supabase service_role keys, DB
+# passwords, or access tokens. (The anon/publishable key in
+# lib/config/supabase_config.dart is safe by design; RLS guards the data.)
+.env
+.env.*
+*.env
+
+# Supabase CLI local state (kept out even if the CLI is added later)
+supabase/.temp/
+supabase/.branches/
+supabase/.env
