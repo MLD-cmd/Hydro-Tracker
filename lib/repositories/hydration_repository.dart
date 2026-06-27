@@ -5,6 +5,8 @@ import '../models/drink_type.dart';
 import '../models/water_entry.dart';
 import '../models/achievement.dart';
 import 'entry_repository.dart';
+import '../domain/entry_cache.dart';
+import '../domain/streak.dart';
 
 /// The hydration data store the UI talks to. Entries live in the Supabase
 /// `water_entries` table (via [EntryRepository]); the in-memory [_entries] list
@@ -15,7 +17,9 @@ import 'entry_repository.dart';
 /// connection, but reads fall back to the cache. Queue-and-sync offline writes
 /// would be a later Drift/PowerSync step.
 class HydrationRepository {
-  static const _entriesKey = 'water_entries_v1';
+  // The cache key lives in domain/entry_cache.dart so the notification
+  // background isolate writes to the same store (see [appendCachedEntry]).
+  static const _entriesKey = kEntriesCacheKey;
 
   HydrationRepository({EntryRepository? remote})
       : _remote = remote ?? EntryRepository();
@@ -79,6 +83,10 @@ class HydrationRepository {
 
   Future<List<WaterEntry>> _readCache() async {
     final prefs = await SharedPreferences.getInstance();
+    // Re-read from disk so writes made by the notification background isolate
+    // (quick-log) are visible here — SharedPreferences otherwise serves this
+    // isolate's stale in-memory copy, and the next _persist would clobber them.
+    await prefs.reload();
     final raw = prefs.getString(_entriesKey);
     if (raw == null || raw.isEmpty) return [];
     final decoded = jsonDecode(raw) as List<dynamic>;
@@ -263,21 +271,16 @@ class HydrationRepository {
     });
   }
 
-  /// Number of consecutive days (ending today) that met [goalMl].
-  int currentStreak(int goalMl) {
-    var streak = 0;
-    final today = DateTime.now();
-    for (var i = 0; ; i++) {
-      final day = DateTime(today.year, today.month, today.day)
-          .subtract(Duration(days: i));
-      if (totalForDay(day) >= goalMl) {
-        streak++;
-      } else {
-        break;
-      }
-    }
-    return streak;
-  }
+  /// Live streak state for [goalMl]. Keeps yesterday's run visible through today
+  /// until the day ends, so it doesn't read as "0 days" before the first drink.
+  StreakStatus streakStatus(int goalMl) => computeStreak(
+        goalMl: goalMl,
+        today: DateTime.now(),
+        totalForDay: totalForDay,
+      );
+
+  /// Number of consecutive goal-met days ending today (today counts once met).
+  int currentStreak(int goalMl) => streakStatus(goalMl).count;
 
   /// A whole-history snapshot used to evaluate achievements.
   HydrationStats statsFor(int goalMl) {

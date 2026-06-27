@@ -1,8 +1,51 @@
+import 'dart:ui' show DartPluginRegistrant;
+
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
-import 'reminder_schedule.dart';
+import '../domain/entry_cache.dart';
+import '../domain/reminder_schedule.dart';
+import '../models/water_entry.dart';
+
+/// Prefix for quick-log action ids; the amount in millilitres follows, e.g.
+/// `log_250`. Encoding the amount in the id means the background isolate can
+/// resolve it without reading the user's presets.
+const String _quickLogActionPrefix = 'log_';
+
+/// Handles a tapped quick-log action — on the main isolate when the app is in
+/// the foreground, and on a background isolate (via [notificationTapBackground])
+/// when it isn't. Appends a Water entry of the action's amount straight to the
+/// SharedPreferences cache; [HydrationRepository.load] migrates it up to
+/// Supabase on the next app open, so no network/auth is needed here.
+Future<void> handleQuickLogResponse(NotificationResponse response) async {
+  final actionId = response.actionId;
+  if (actionId == null || !actionId.startsWith(_quickLogActionPrefix)) return;
+  final ml = int.tryParse(actionId.substring(_quickLogActionPrefix.length));
+  if (ml == null || ml <= 0) return;
+
+  // In a background isolate the binding exists but plugins aren't registered;
+  // DartPluginRegistrant wires up shared_preferences's method channel.
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(kEntriesCacheKey);
+  final entry = WaterEntry(
+    amountMl: ml,
+    timestamp: DateTime.now(),
+    type: 'Water',
+  );
+  await prefs.setString(kEntriesCacheKey, appendCachedEntry(raw, entry));
+}
+
+/// Background-isolate entry point for quick-log action taps. Must be top-level
+/// and annotated so the Dart compiler keeps it.
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  handleQuickLogResponse(response);
+}
 
 /// Wraps flutter_local_notifications to deliver the hydration reminders the
 /// Settings toggles control. Reminders fire daily at waking hours; "Quiet
@@ -30,10 +73,13 @@ class NotificationService {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _plugin.initialize(
       settings: const InitializationSettings(android: android),
+      onDidReceiveNotificationResponse: notificationTapBackground,
+      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
     );
     _ready = true;
   }
 
+  /// Plain details for the one-off "reminders on" confirmation (no actions).
   NotificationDetails get _details => const NotificationDetails(
     android: AndroidNotificationDetails(
       _channelId,
@@ -43,6 +89,32 @@ class NotificationService {
       priority: Priority.high,
     ),
   );
+
+  /// Reminder details carrying the quick-log action buttons. Each [quickLogs]
+  /// entry becomes a one-tap "label + ml" action (e.g. "Glass 250ml"); tapping
+  /// the notification body instead opens the app for an exact amount.
+  NotificationDetails _reminderDetails(
+    List<({String label, int ml})> quickLogs,
+  ) {
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Gentle nudges to keep you sipping',
+        importance: Importance.high,
+        priority: Priority.high,
+        actions: [
+          for (final q in quickLogs)
+            AndroidNotificationAction(
+              '$_quickLogActionPrefix${q.ml}',
+              '${q.label} ${q.ml}ml',
+              showsUserInterface: false,
+              cancelNotification: true,
+            ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _ensurePermission() async {
     final android = _plugin
@@ -60,6 +132,10 @@ class NotificationService {
     int startHour = 8,
     int endHour = 20,
     int intervalHours = 2,
+    List<({String label, int ml})> quickLogs = const [
+      (label: 'Glass', ml: 250),
+      (label: 'Bottle', ml: 500),
+    ],
   }) async {
     await init();
     await _plugin.cancelAll();
@@ -83,14 +159,15 @@ class NotificationService {
       intervalHours: intervalHours,
       quietHours: quietHours,
     );
+    final details = _reminderDetails(quickLogs);
     var id = 100;
     for (final hour in hours) {
       await _plugin.zonedSchedule(
         id: id++,
         title: 'Time to hydrate 💧',
-        body: 'Take a sip and keep your streak going!',
+        body: 'Tap a glass below, or open to log something else.',
         scheduledDate: _nextInstanceOfHour(hour),
-        notificationDetails: _details,
+        notificationDetails: details,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         matchDateTimeComponents: DateTimeComponents.time, // repeat daily
       );

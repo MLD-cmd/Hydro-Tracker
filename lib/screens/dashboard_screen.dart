@@ -8,12 +8,16 @@ import '../models/achievement.dart';
 import '../models/app_settings.dart';
 import '../models/drink_type.dart';
 import '../services/auth_service.dart';
-import '../services/drink_catalog.dart';
-import '../services/drink_type_repository.dart';
-import '../services/hydration_repository.dart';
+import '../domain/drink_catalog.dart';
+import '../repositories/drink_type_repository.dart';
+import '../domain/hydration_forecast.dart';
+import '../repositories/hydration_repository.dart';
 import '../services/notification_service.dart';
-import '../services/profile_repository.dart';
-import '../services/settings_repository.dart';
+import '../domain/preset_catalog.dart';
+import '../repositories/preset_repository.dart';
+import '../domain/streak.dart';
+import '../repositories/profile_repository.dart';
+import '../repositories/settings_repository.dart';
 import '../services/weather_service.dart';
 import '../state/environment_theme.dart';
 import '../widgets/celebration_overlay.dart';
@@ -42,7 +46,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final SettingsRepository _settingsRepo = SettingsRepository();
   final ProfileRepository _profileRepo = ProfileRepository();
   final DrinkTypeRepository _drinkRepo = DrinkTypeRepository();
+  final PresetRepository _presetRepo = PresetRepository();
   DrinkCatalog _catalog = const DrinkCatalog();
+  PresetCatalog _presetCatalog = const PresetCatalog();
   static const WeatherService _weather = WeatherService();
 
   AppSettings _settings = const AppSettings();
@@ -76,6 +82,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Best-effort load of the user's custom drinks (built-ins always present).
     final custom = await _drinkRepo.fetchAll();
     if (custom != null) _catalog = DrinkCatalog(custom: custom);
+    // Likewise the user's custom quick-log presets (built-ins always present).
+    final presets = await _presetRepo.fetchAll();
+    if (presets != null) _presetCatalog = PresetCatalog(custom: presets);
     var settings = _settingsRepo.settings;
     // Prefer the signed-in user's cloud profile (real name, goal, theme…) over
     // the local defaults. Falls back to local when offline / signed out.
@@ -106,6 +115,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       startHour: _settings.reminderStartHour,
       endHour: _settings.reminderEndHour,
       intervalHours: _settings.reminderIntervalHours,
+      quickLogs: _quickLogActions,
     );
     // Replace the simulated weather with the live temperature for the saved
     // city. Fire-and-forget: the UI already has a usable value to show.
@@ -137,6 +147,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return hydrationNudgeFor(_repo.todayByType());
   }
 
+  /// The first two presets, surfaced as the reminder's quick-log action
+  /// buttons (e.g. "Glass 250ml", "Bottle 500ml").
+  List<({String label, int ml})> get _quickLogActions => _presetCatalog.all
+      .take(2)
+      .map((p) => (label: p.label, ml: p.amountMl))
+      .toList();
+
   /// The goal in effect today: the base goal, nudged up on hot days when the
   /// smart goal is enabled.
   int get _effectiveGoal {
@@ -145,22 +162,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return base + _weather.goalBumpMl(_todayWeather);
   }
 
-  Future<void> _logWater(int amount) async {
+  Future<void> _logWater(int amount, DrinkType type) async {
     final goal = _effectiveGoal;
     final before = _repo.todayTotal;
     // Which badges were already earned before this drink, so we can spot the
     // ones this drink unlocks.
     final unlockedBefore = _unlockedAchievementIds(goal);
-    await _repo.addEntry(amount, type: _selectedType.name);
+    await _repo.addEntry(amount, type: type.name);
     final after = _repo.todayTotal;
     final newlyUnlocked = kAchievements
         .where((a) =>
             a.isUnlocked(_repo.statsFor(goal)) && !unlockedBefore.contains(a.id))
         .toList();
     if (!mounted) return;
-    setState(() {});
+    // Remember the chosen drink so the log card and next sheet default to it.
+    setState(() => _selectedType = type);
 
-    _showUndoSnackBar(amount);
+    _showUndoSnackBar(amount, type);
 
     // Celebrate the moment the day's total first crosses the goal, then announce
     // any badges that drink earned. Awaited so they appear one at a time rather
@@ -187,13 +205,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     };
   }
 
-  void _showUndoSnackBar(int amount) {
+  void _showUndoSnackBar(int amount, DrinkType type) {
     const visibleFor = Duration(seconds: 3);
     final messenger = ScaffoldMessenger.of(context);
     messenger.clearSnackBars();
     messenger.showSnackBar(
       SnackBar(
-        content: Text('Logged ${amount}ml ${_selectedType.name}'),
+        content: Text('Logged ${amount}ml ${type.name}'),
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppColors.primary,
         duration: visibleFor,
@@ -250,6 +268,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         startHour: next.reminderStartHour,
         endHour: next.reminderEndHour,
         intervalHours: next.reminderIntervalHours,
+        quickLogs: _quickLogActions,
       );
     }
     // Picking a new city re-pulls the live temperature for that place.
@@ -281,6 +300,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _catalog = DrinkCatalog(
                 custom:
                     _catalog.custom.where((d) => d.id != drink.id).toList(),
+              );
+            });
+          },
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openManagePresets() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ManagePresetsScreen(
+          custom: _presetCatalog.custom,
+          onAdd: (label, amountMl, iconKey) async {
+            final created = await _presetRepo.insert(
+              label: label,
+              amountMl: amountMl,
+              iconKey: iconKey,
+            );
+            if (created != null) {
+              setState(() {
+                _presetCatalog =
+                    PresetCatalog(custom: [..._presetCatalog.custom, created]);
+              });
+            }
+            return created;
+          },
+          onDelete: (preset) async {
+            if (preset.id != null) await _presetRepo.delete(preset.id!);
+            setState(() {
+              _presetCatalog = PresetCatalog(
+                custom: _presetCatalog.custom
+                    .where((p) => p.id != preset.id)
+                    .toList(),
               );
             });
           },
@@ -344,6 +398,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
     final goal = _effectiveGoal;
+    final streak = _repo.streakStatus(goal);
+    final forecast = forecastHydration(
+      currentMl: _repo.todayTotal,
+      goalMl: goal,
+      now: DateTime.now(),
+      dayStartHour: _settings.reminderStartHour,
+      dayEndHour: _settings.reminderEndHour,
+    );
     return Scaffold(
       // The bottom nav floats with rounded top corners; tint the Scaffold with
       // the gradient's bottom colour so those corners reveal the gradient
@@ -355,6 +417,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             _HomeTab(
               catalog: _catalog,
+              presetCatalog: _presetCatalog,
               currentMl: _repo.todayTotal,
               targetMl: goal,
               smartGoalActive: _settings.smartGoal,
@@ -362,11 +425,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               goalBump: _weather.goalBumpMl(_todayWeather),
               lastIntakeLabel: _lastIntakeLabel,
               lastIntakeDetail: _lastIntakeDetail,
-              streak: _repo.currentStreak(goal),
+              streak: streak,
+              forecast: forecast,
               selectedType: _selectedType,
               byType: _repo.todayByType(),
               nudge: _nudge,
-              onSelectType: (t) => setState(() => _selectedType = t),
               onLog: _logWater,
               onRefresh: _refresh,
             ),
@@ -389,6 +452,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onSettingsChanged: _updateSettings,
               onOpenHistory: _openHistory,
               onManageDrinks: _openManageDrinks,
+              onManagePresets: _openManagePresets,
               onLogout: _logout,
               onRefresh: _refresh,
             ),
@@ -406,6 +470,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 class _HomeTab extends StatelessWidget {
   const _HomeTab({
     required this.catalog,
+    required this.presetCatalog,
     required this.currentMl,
     required this.targetMl,
     required this.smartGoalActive,
@@ -414,15 +479,16 @@ class _HomeTab extends StatelessWidget {
     required this.lastIntakeLabel,
     required this.lastIntakeDetail,
     required this.streak,
+    required this.forecast,
     required this.selectedType,
     required this.byType,
     required this.nudge,
-    required this.onSelectType,
     required this.onLog,
     required this.onRefresh,
   });
 
   final DrinkCatalog catalog;
+  final PresetCatalog presetCatalog;
   final int currentMl;
   final int targetMl;
   final bool smartGoalActive;
@@ -430,14 +496,14 @@ class _HomeTab extends StatelessWidget {
   final int goalBump;
   final String lastIntakeLabel;
   final String lastIntakeDetail;
-  final int streak;
+  final StreakStatus streak;
+  final HydrationForecast forecast;
   final DrinkType selectedType;
 
   /// Raw millilitres logged today, grouped by drink-type name.
   final Map<String, int> byType;
   final HydrationNudge? nudge;
-  final ValueChanged<DrinkType> onSelectType;
-  final ValueChanged<int> onLog;
+  final void Function(int amount, DrinkType type) onLog;
   final Future<void> Function() onRefresh;
 
   @override
@@ -497,15 +563,19 @@ class _HomeTab extends StatelessWidget {
                     icon: Icons.local_fire_department_rounded,
                     iconColor: AppColors.hibiscus,
                     title: 'Daily Streak',
-                    value: streak == 1 ? '1 day' : '$streak days',
-                    detail: streak == 0
+                    value: streak.count == 1 ? '1 day' : '${streak.count} days',
+                    detail: streak.count == 0
                         ? 'Hit your goal today!'
-                        : 'Keep it going!',
+                        : streak.metToday
+                            ? 'Keep it going!'
+                            : "Don't break it today!",
                   ),
                 ),
               ],
             ),
           ),
+          const SizedBox(height: 16),
+          _ForecastCard(forecast: forecast),
           const SizedBox(height: 28),
           Center(
             child: Text(
@@ -517,13 +587,12 @@ class _HomeTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _DrinkTypeSelector(
+          _CustomLogCard(
             catalog: catalog,
-            selected: selectedType,
-            onSelect: onSelectType,
+            presetCatalog: presetCatalog,
+            initialType: selectedType,
+            onLog: onLog,
           ),
-          const SizedBox(height: 16),
-          _CustomLogCard(type: selectedType, onLog: onLog),
           if (byType.isNotEmpty) ...[
             const SizedBox(height: 24),
             _DrinkMixCard(catalog: catalog, byType: byType, nudge: nudge),
@@ -928,29 +997,137 @@ class _InfoCard extends StatelessWidget {
   }
 }
 
-/// The single Quick Log action. Tapping it opens a sheet to choose or type any
-/// amount for the selected drink — a 250ml glass, a 330ml can, a 750ml bottle,
-/// a part-finished mug. Shows the selected drink so it's clear what gets logged.
-class _CustomLogCard extends StatelessWidget {
-  const _CustomLogCard({required this.type, required this.onLog});
+/// "Today's Pace" — a one-line read on how the day is tracking against an even
+/// spread of the goal across the user's active hours, plus a projected finish
+/// time when on/ahead of pace. Turns the static ring into a forward-looking
+/// nudge: "drink a bit now" vs "you're cruising, goal by 6:40 PM".
+class _ForecastCard extends StatelessWidget {
+  const _ForecastCard({required this.forecast});
 
-  final DrinkType type;
-  final ValueChanged<int> onLog;
+  final HydrationForecast forecast;
+
+  /// 12-hour clock like "6:40 PM" for the projected finish.
+  static String _clock(DateTime t) {
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final m = t.minute.toString().padLeft(2, '0');
+    final period = t.hour < 12 ? 'AM' : 'PM';
+    return '$h:$m $period';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final f = forecast;
+    final finish = f.projectedFinish;
+    final byLabel =
+        finish == null ? null : 'on this pace, goal by ${_clock(finish)}';
+
+    final IconData icon;
+    final Color color;
+    final String title;
+    final String detail;
+    switch (f.status) {
+      case PaceStatus.met:
+        icon = Icons.check_circle_rounded;
+        color = AppColors.primary;
+        title = 'Goal reached';
+        detail = "You're all set for today — nice work!";
+      case PaceStatus.ahead:
+        icon = Icons.trending_up_rounded;
+        color = AppColors.secondaryAccent;
+        title = 'Ahead of pace';
+        detail = '${f.paceDeltaMl.abs()}ml ahead'
+            '${byLabel == null ? '' : ' — $byLabel'}';
+      case PaceStatus.onTrack:
+        icon = Icons.timeline_rounded;
+        color = AppColors.secondaryAccent;
+        title = 'On track';
+        detail = byLabel ?? '${f.remainingMl}ml to go';
+      case PaceStatus.behind:
+        icon = Icons.trending_down_rounded;
+        color = AppColors.hibiscus;
+        title = 'Behind pace';
+        detail = '${f.paceDeltaMl.abs()}ml behind — ${f.remainingMl}ml to go';
+      case PaceStatus.notStarted:
+        icon = Icons.local_drink_rounded;
+        color = AppColors.onSurfaceVariant;
+        title = 'No sips yet';
+        detail = "${f.remainingMl}ml to reach today's goal";
+    }
+
+    return SoftCard(
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: AppTheme.labelBold.copyWith(
+                    fontSize: 15,
+                    color: AppColors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  style: AppTheme.bodyMd.copyWith(fontSize: 13, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The single Quick Log action on Home. Tapping it opens the log sheet, which
+/// is where you pick the drink, the amount (a preset or an exact value), and
+/// confirm — keeping Home itself uncluttered.
+class _CustomLogCard extends StatelessWidget {
+  const _CustomLogCard({
+    required this.catalog,
+    required this.presetCatalog,
+    required this.initialType,
+    required this.onLog,
+  });
+
+  final DrinkCatalog catalog;
+  final PresetCatalog presetCatalog;
+  final DrinkType initialType;
+  final void Function(int amount, DrinkType type) onLog;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = initialType.color;
     return SoftCard(
       onTap: () async {
-        final amount = await showModalBottomSheet<int>(
+        final result = await showModalBottomSheet<({int amount, DrinkType type})>(
           context: context,
           isScrollControlled: true,
           backgroundColor: AppColors.white,
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          builder: (_) => _CustomAmountSheet(type: type),
+          builder: (_) => _CustomAmountSheet(
+            catalog: catalog,
+            presetCatalog: presetCatalog,
+            initialType: initialType,
+          ),
         );
-        if (amount != null) onLog(amount);
+        if (result != null) onLog(result.amount, result.type);
       },
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       child: Row(
@@ -959,10 +1136,10 @@ class _CustomLogCard extends StatelessWidget {
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              color: type.color.withValues(alpha: 0.16),
+              color: color.withValues(alpha: 0.16),
               shape: BoxShape.circle,
             ),
-            child: Icon(type.icon, color: type.color, size: 28),
+            child: Icon(Icons.local_drink_rounded, color: color, size: 28),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -971,7 +1148,7 @@ class _CustomLogCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Log ${type.name}',
+                  'Log a drink',
                   style: AppTheme.headlineLg.copyWith(
                     fontSize: 19,
                     color: AppColors.onSurface,
@@ -979,27 +1156,33 @@ class _CustomLogCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Choose or type any amount',
+                  'Pick your drink & amount',
                   style: AppTheme.bodyMd.copyWith(fontSize: 13),
                 ),
               ],
             ),
           ),
-          Icon(Icons.add_circle_rounded, color: type.color, size: 32),
+          Icon(Icons.add_circle_rounded, color: color, size: 32),
         ],
       ),
     );
   }
 }
 
-/// The bottom sheet behind the "Custom" card. Lets you type an exact amount,
-/// nudge it ±50 with the steppers, or tap a real-world bottle/can size, then
-/// pops the chosen millilitres back to the caller. Clamps to a sane range so a
-/// stray extra digit can't balloon the day's total.
+/// The log sheet — the one place logging happens. It holds the drink-type
+/// selector, the container presets, and a custom stepper/field, then pops the
+/// chosen amount + drink back to the caller. Tapping a preset fills the amount
+/// (which you can still fine-tune, since a real glass isn't exactly 250ml).
 class _CustomAmountSheet extends StatefulWidget {
-  const _CustomAmountSheet({required this.type});
+  const _CustomAmountSheet({
+    required this.catalog,
+    required this.presetCatalog,
+    required this.initialType,
+  });
 
-  final DrinkType type;
+  final DrinkCatalog catalog;
+  final PresetCatalog presetCatalog;
+  final DrinkType initialType;
 
   @override
   State<_CustomAmountSheet> createState() => _CustomAmountSheetState();
@@ -1007,12 +1190,10 @@ class _CustomAmountSheet extends StatefulWidget {
 
 class _CustomAmountSheetState extends State<_CustomAmountSheet> {
   static const int _min = 10;
-  static const int _max = 3000;
-  // A glass, a can, a standard bottle, a large bottle, a litre — the everyday
-  // sizes, so the common log is still just open-tap-confirm.
-  static const List<int> _quickSizes = [250, 330, 500, 750, 1000];
+  static const int _max = 5000;
 
   int _amount = 250;
+  late DrinkType _type = widget.initialType;
   late final TextEditingController _controller = TextEditingController(
     text: '$_amount',
   );
@@ -1043,7 +1224,7 @@ class _CustomAmountSheetState extends State<_CustomAmountSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final type = widget.type;
+    final type = _type;
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
@@ -1051,143 +1232,154 @@ class _CustomAmountSheetState extends State<_CustomAmountSheet> {
         top: 10,
         bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 18),
-              decoration: BoxDecoration(
-                color: AppColors.outlineVariant,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          Row(
-            children: [
-              Container(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
                 width: 40,
-                height: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 18),
                 decoration: BoxDecoration(
-                  color: type.color.withValues(alpha: 0.16),
-                  shape: BoxShape.circle,
+                  color: AppColors.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
                 ),
-                child: Icon(type.icon, color: type.color, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Add ${type.name}',
-                style: AppTheme.headlineLg.copyWith(fontSize: 18),
-              ),
-            ],
-          ),
-          const SizedBox(height: 22),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _StepButton(
-                icon: Icons.remove_rounded,
-                onTap: () => _setAmount(_amount - 50),
-              ),
-              const SizedBox(width: 18),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  SizedBox(
-                    width: 100,
-                    child: TextField(
-                      controller: _controller,
-                      onChanged: _onFieldChanged,
-                      textAlign: TextAlign.center,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(4),
-                      ],
-                      style: AppTheme.headlineLg.copyWith(
-                        fontSize: 34,
-                        color: AppColors.onSurface,
-                      ),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.only(bottom: 4),
-                        enabledBorder: const UnderlineInputBorder(
-                          borderSide: BorderSide(
-                            color: AppColors.outlineVariant,
-                          ),
-                        ),
-                        focusedBorder: const UnderlineInputBorder(
-                          borderSide: BorderSide(
-                            color: AppColors.secondaryAccent,
-                            width: 2,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8, bottom: 8),
-                    child: Text(
-                      'ml',
-                      style: AppTheme.bodyMd.copyWith(fontSize: 16),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(width: 18),
-              _StepButton(
-                icon: Icons.add_rounded,
-                onTap: () => _setAmount(_amount + 50),
-              ),
-            ],
-          ),
-          const SizedBox(height: 22),
-          Wrap(
-            spacing: 10,
-            runSpacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              for (final ml in _quickSizes)
-                ChoiceChip(
-                  label: Text('$ml ml'),
-                  selected: _amount == ml,
-                  onSelected: (_) => _setAmount(ml),
-                  showCheckmark: false,
-                  labelStyle: AppTheme.labelBold.copyWith(
-                    color: _amount == ml
-                        ? AppColors.onPrimary
-                        : AppColors.onSurface,
-                  ),
-                  backgroundColor: AppColors.surfaceContainer,
-                  selectedColor: AppColors.secondaryAccent,
-                  side: BorderSide.none,
-                ),
-            ],
-          ),
-          const SizedBox(height: 26),
-          SizedBox(
-            height: 52,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: AppColors.onPrimary,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              onPressed: () =>
-                  Navigator.of(context).pop(_amount.clamp(_min, _max)),
-              child: Text(
-                'Log ${_amount.clamp(_min, _max)}ml ${type.name}',
-                style: AppTheme.button,
               ),
             ),
-          ),
-        ],
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: type.color.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(type.icon, color: type.color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Add ${type.name}',
+                  style: AppTheme.headlineLg.copyWith(fontSize: 18),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            // Pick the drink right here in the sheet.
+            _DrinkTypeSelector(
+              catalog: widget.catalog,
+              selected: _type,
+              onSelect: (t) => setState(() => _type = t),
+            ),
+            const SizedBox(height: 22),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _StepButton(
+                  icon: Icons.remove_rounded,
+                  onTap: () => _setAmount(_amount - 50),
+                ),
+                const SizedBox(width: 18),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    SizedBox(
+                      width: 100,
+                      child: TextField(
+                        controller: _controller,
+                        onChanged: _onFieldChanged,
+                        textAlign: TextAlign.center,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(4),
+                        ],
+                        style: AppTheme.headlineLg.copyWith(
+                          fontSize: 34,
+                          color: AppColors.onSurface,
+                        ),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.only(bottom: 4),
+                          enabledBorder: const UnderlineInputBorder(
+                            borderSide: BorderSide(
+                              color: AppColors.outlineVariant,
+                            ),
+                          ),
+                          focusedBorder: const UnderlineInputBorder(
+                            borderSide: BorderSide(
+                              color: AppColors.secondaryAccent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8, bottom: 8),
+                      child: Text(
+                        'ml',
+                        style: AppTheme.bodyMd.copyWith(fontSize: 16),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 18),
+                _StepButton(
+                  icon: Icons.add_rounded,
+                  onTap: () => _setAmount(_amount + 50),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            // The container presets — tap to fill the amount above.
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final preset in widget.presetCatalog.all)
+                  ChoiceChip(
+                    label: Text('${preset.label} · ${preset.amountMl}ml'),
+                    selected: _amount == preset.amountMl,
+                    onSelected: (_) => _setAmount(preset.amountMl),
+                    showCheckmark: false,
+                    labelStyle: AppTheme.labelBold.copyWith(
+                      color: _amount == preset.amountMl
+                          ? AppColors.onPrimary
+                          : AppColors.onSurface,
+                    ),
+                    backgroundColor: AppColors.surfaceContainer,
+                    selectedColor: AppColors.secondaryAccent,
+                    side: BorderSide.none,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 26),
+            SizedBox(
+              height: 52,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.onPrimary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                onPressed: () => Navigator.of(context).pop(
+                  (amount: _amount.clamp(_min, _max), type: _type),
+                ),
+                child: Text(
+                  'Log ${_amount.clamp(_min, _max)}ml ${type.name}',
+                  style: AppTheme.button,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

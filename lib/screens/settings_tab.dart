@@ -5,8 +5,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/activity_level.dart';
 import '../models/app_settings.dart';
+import '../models/bottle_preset.dart';
 import '../models/drink_type.dart';
-import '../services/goal_calculator.dart';
+import '../domain/goal_calculator.dart';
 import '../services/weather_service.dart';
 import '../state/environment_theme.dart';
 import '../theme/app_theme.dart';
@@ -24,6 +25,7 @@ class SettingsTab extends StatelessWidget {
     required this.onSettingsChanged,
     required this.onOpenHistory,
     required this.onManageDrinks,
+    required this.onManagePresets,
     required this.onLogout,
     required this.onRefresh,
   });
@@ -34,6 +36,7 @@ class SettingsTab extends StatelessWidget {
   final ValueChanged<AppSettings> onSettingsChanged;
   final VoidCallback onOpenHistory;
   final VoidCallback onManageDrinks;
+  final VoidCallback onManagePresets;
   final VoidCallback onLogout;
   final Future<void> Function() onRefresh;
 
@@ -171,6 +174,7 @@ class SettingsTab extends StatelessWidget {
                 if (settings.reminders) ...[
                   const Divider(height: 1, indent: 56),
                   _ReminderScheduleRow(
+                    icon: Icons.wb_twilight_rounded,
                     label: 'Start',
                     hour: settings.reminderStartHour,
                     onChanged: (h) => onSettingsChanged(
@@ -179,6 +183,7 @@ class SettingsTab extends StatelessWidget {
                   ),
                   const Divider(height: 1, indent: 56),
                   _ReminderScheduleRow(
+                    icon: Icons.bedtime_rounded,
                     label: 'End',
                     hour: settings.reminderEndHour,
                     onChanged: (h) => onSettingsChanged(
@@ -272,6 +277,39 @@ class SettingsTab extends StatelessWidget {
                 Expanded(
                   child: Text(
                     'Manage Drinks',
+                    style: AppTheme.labelBold.copyWith(fontSize: 15),
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SoftCard(
+            onTap: onManagePresets,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.straighten_rounded,
+                    size: 20,
+                    color: AppColors.primaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    'Quick-Log Presets',
                     style: AppTheme.labelBold.copyWith(fontSize: 15),
                   ),
                 ),
@@ -1099,7 +1137,7 @@ class _PersonalizedGoalCard extends StatelessWidget {
                 : '',
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'Weight (kg)',
+              hintText: 'Weight (kg)',
               isDense: true,
               filled: true,
               fillColor: AppColors.surfaceContainerLow,
@@ -1175,11 +1213,13 @@ class _PersonalizedGoalCard extends StatelessWidget {
 /// A row that picks a whole-hour value (0–23) for the reminder window.
 class _ReminderScheduleRow extends StatelessWidget {
   const _ReminderScheduleRow({
+    required this.icon,
     required this.label,
     required this.hour,
     required this.onChanged,
   });
 
+  final IconData icon;
   final String label;
   final int hour;
   final ValueChanged<int> onChanged;
@@ -1190,13 +1230,30 @@ class _ReminderScheduleRow extends StatelessWidget {
     return '$display:00 $period';
   }
 
+  Future<void> _pickHour(BuildContext context) async {
+    // A proper time picker (whole hours only) replaces the long 24-item menu.
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: hour, minute: 0),
+      helpText: 'Select $label time',
+      builder: (context, child) => MediaQuery(
+        // Force the 12-hour clock dial; reminders are scheduled on the hour.
+        data: MediaQuery.of(context)
+            .copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (picked != null) onChanged(picked.hour);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          const SizedBox(width: 56),
+          _SettingLeadingIcon(icon: icon),
+          const SizedBox(width: 14),
           Expanded(
             child: Text(
               label,
@@ -1206,15 +1263,9 @@ class _ReminderScheduleRow extends StatelessWidget {
               ),
             ),
           ),
-          PopupMenuButton<int>(
-            initialValue: hour,
-            onSelected: onChanged,
-            position: PopupMenuPosition.under,
-            color: AppColors.white,
-            itemBuilder: (context) => [
-              for (var h = 0; h < 24; h++)
-                PopupMenuItem<int>(value: h, child: Text(_fmt(h))),
-            ],
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _pickHour(context),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -1229,6 +1280,27 @@ class _ReminderScheduleRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The 40×40 rounded leading icon used by the notification setting rows, so
+/// Start / End / Every line up with the toggle rows above them.
+class _SettingLeadingIcon extends StatelessWidget {
+  const _SettingLeadingIcon({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, size: 20, color: AppColors.primaryContainer),
     );
   }
 }
@@ -1249,7 +1321,8 @@ class _ReminderIntervalRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          const SizedBox(width: 56),
+          const _SettingLeadingIcon(icon: Icons.repeat_rounded),
+          const SizedBox(width: 14),
           Expanded(
             child: Text(
               'Every',
@@ -1491,6 +1564,191 @@ class _AddDrinkSheetState extends State<_AddDrinkSheet> {
             child: FilledButton(
               onPressed: _saving ? null : _save,
               child: Text(_saving ? 'Saving…' : 'Add drink'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Manage user-defined quick-log presets. Mirrors [ManageDrinksScreen]: a
+/// read-only "Built-in" list plus the user's custom presets with delete.
+class ManagePresetsScreen extends StatefulWidget {
+  const ManagePresetsScreen({
+    super.key,
+    required this.custom,
+    required this.onAdd,
+    required this.onDelete,
+  });
+
+  final List<BottlePreset> custom;
+  final Future<BottlePreset?> Function(
+    String label,
+    int amountMl,
+    String iconKey,
+  ) onAdd;
+  final Future<void> Function(BottlePreset preset) onDelete;
+
+  @override
+  State<ManagePresetsScreen> createState() => _ManagePresetsScreenState();
+}
+
+class _ManagePresetsScreenState extends State<ManagePresetsScreen> {
+  late final List<BottlePreset> _custom = [...widget.custom];
+
+  Future<void> _openAddSheet() async {
+    final added = await showModalBottomSheet<BottlePreset>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _AddPresetSheet(onAdd: widget.onAdd),
+    );
+    if (added != null && mounted) setState(() => _custom.add(added));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Quick-Log Presets')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openAddSheet,
+        backgroundColor: AppColors.secondaryAccent,
+        child: const Icon(Icons.add_rounded, color: AppColors.white),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text('Built-in', style: AppTheme.labelBold),
+          const SizedBox(height: 8),
+          for (final p in kBottlePresets)
+            ListTile(
+              leading: Icon(p.icon, color: AppColors.secondaryAccent),
+              title: Text(p.label),
+              subtitle: Text('${p.amountMl}ml'),
+            ),
+          const SizedBox(height: 16),
+          Text('Your presets', style: AppTheme.labelBold),
+          const SizedBox(height: 8),
+          if (_custom.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('No custom presets yet. Tap + to add one.'),
+            ),
+          for (final p in _custom)
+            ListTile(
+              leading: Icon(p.icon, color: AppColors.secondaryAccent),
+              title: Text(p.label),
+              subtitle: Text('${p.amountMl}ml'),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline_rounded),
+                onPressed: () async {
+                  await widget.onDelete(p);
+                  if (mounted) setState(() => _custom.remove(p));
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet to create a custom preset: label, amount, icon.
+class _AddPresetSheet extends StatefulWidget {
+  const _AddPresetSheet({required this.onAdd});
+
+  final Future<BottlePreset?> Function(
+    String label,
+    int amountMl,
+    String iconKey,
+  ) onAdd;
+
+  @override
+  State<_AddPresetSheet> createState() => _AddPresetSheetState();
+}
+
+class _AddPresetSheetState extends State<_AddPresetSheet> {
+  static const int _min = 10;
+  static const int _max = 5000;
+
+  final TextEditingController _label = TextEditingController();
+  final TextEditingController _amount = TextEditingController(text: '500');
+  String _iconKey = drinkIconKeys.first;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _label.dispose();
+    _amount.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final label = _label.text.trim();
+    final amount = int.tryParse(_amount.text.trim()) ?? 0;
+    if (label.isEmpty || amount < _min || _saving) return;
+    setState(() => _saving = true);
+    final created =
+        await widget.onAdd(label, amount.clamp(_min, _max), _iconKey);
+    if (mounted) Navigator.of(context).pop(created);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 16,
+        bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('New preset', style: AppTheme.headlineLg.copyWith(fontSize: 18)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _label,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Label',
+              hintText: 'e.g. Nalgene',
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _amount,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Amount',
+              suffixText: 'ml',
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text('Icon', style: AppTheme.bodyMd),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final key in drinkIconKeys)
+                ChoiceChip(
+                  label: Icon(iconForKey(key), size: 20),
+                  selected: key == _iconKey,
+                  onSelected: (_) => setState(() => _iconKey = key),
+                ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: _saving ? null : _save,
+              child: Text(_saving ? 'Saving…' : 'Add preset'),
             ),
           ),
         ],
