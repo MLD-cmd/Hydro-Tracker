@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydro_tracker/models/drink_type.dart';
-import 'package:hydro_tracker/services/drink_catalog.dart';
+import 'package:hydro_tracker/domain/drink_catalog.dart';
 
 void main() {
   test('catalog combines built-ins and custom drinks', () {

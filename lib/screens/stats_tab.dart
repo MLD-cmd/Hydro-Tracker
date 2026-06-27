@@ -3,7 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/achievement.dart';
 import '../models/drink_type.dart';
 import '../models/water_entry.dart';
-import '../services/hydration_repository.dart';
+import '../repositories/hydration_repository.dart';
 import '../widgets/soft_card.dart';
 
 /// The time span the Stats screen is showing.

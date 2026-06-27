@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydro_tracker/models/activity_level.dart';
-import 'package:hydro_tracker/services/goal_calculator.dart';
+import 'package:hydro_tracker/domain/goal_calculator.dart';
 
 void main() {
   test('baseline is ~35 ml per kg, rounded to nearest 50', () {

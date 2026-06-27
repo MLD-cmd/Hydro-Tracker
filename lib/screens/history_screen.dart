@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/drink_type.dart';
 import '../models/water_entry.dart';
-import '../services/drink_catalog.dart';
-import '../services/hydration_repository.dart';
+import '../domain/drink_catalog.dart';
+import '../repositories/hydration_repository.dart';
 import '../state/environment_theme.dart';
 import '../theme/app_theme.dart';
 import '../widgets/entry_edit_sheet.dart';

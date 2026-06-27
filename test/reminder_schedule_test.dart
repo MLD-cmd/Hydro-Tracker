@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hydro_tracker/services/reminder_schedule.dart';
+import 'package:hydro_tracker/domain/reminder_schedule.dart';
 
 void main() {
   test('generates hours from start to end at the interval', () {

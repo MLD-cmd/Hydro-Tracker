@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/settings_repository.dart';
+import '../repositories/settings_repository.dart';
 import '../theme/app_theme.dart';
 import '../widgets/gradient_background.dart';
 import '../widgets/hydration_buddy.dart';

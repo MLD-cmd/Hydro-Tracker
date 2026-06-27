@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
-import 'services/settings_repository.dart';
+import 'repositories/settings_repository.dart';
 import 'state/environment_theme.dart';
 
 Future<void> main() async {

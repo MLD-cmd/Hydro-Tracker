@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hydro_tracker/models/water_entry.dart';
-import 'package:hydro_tracker/services/entry_repository.dart';
-import 'package:hydro_tracker/services/hydration_repository.dart';
+import 'package:hydro_tracker/repositories/entry_repository.dart';
+import 'package:hydro_tracker/repositories/hydration_repository.dart';
 
 /// A remote that never reaches the network — update always "succeeds" locally.
 class _NoopRemote extends EntryRepository {
