@@ -530,6 +530,11 @@ class _HomeTab extends StatelessWidget {
             currentMl: currentMl,
             targetMl: targetMl,
             nudge: nudge,
+            tempC: weather.tempC,
+            tempLabel: weather.label,
+            place: weather.place,
+            streak: streak.count,
+            mix: byType,
           ),
           if (smartGoalActive) ...[
             const SizedBox(height: 12),
