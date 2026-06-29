@@ -64,3 +64,8 @@ devtools_options.yaml
 supabase/.temp/
 supabase/.branches/
 supabase/.env
+
+# Local-only docs & generated diagrams (not part of the app)
+DEMO_SCRIPT.md
+supabase_erd.png
+supabase_schema.png

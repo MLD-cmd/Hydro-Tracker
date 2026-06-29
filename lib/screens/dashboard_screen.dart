@@ -144,7 +144,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// See [hydrationNudgeFor].
   HydrationNudge? get _nudge {
     if (_repo.todayTotal >= _effectiveGoal) return null;
-    return hydrationNudgeFor(_repo.todayByType());
+    return hydrationNudgeFor(_repo.todayByType(_catalog));
   }
 
   /// The first two presets, surfaced as the reminder's quick-log action
@@ -428,7 +428,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               streak: streak,
               forecast: forecast,
               selectedType: _selectedType,
-              byType: _repo.todayByType(),
+              byType: _repo.todayByType(_catalog),
               nudge: _nudge,
               onLog: _logWater,
               onRefresh: _refresh,

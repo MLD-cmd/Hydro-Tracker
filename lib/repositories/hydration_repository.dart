@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/drink_type.dart';
 import '../models/water_entry.dart';
 import '../models/achievement.dart';
 import 'entry_repository.dart';
 import '../domain/entry_cache.dart';
 import '../domain/streak.dart';
+import '../domain/drink_catalog.dart';
 
 /// The hydration data store the UI talks to. Entries live in the Supabase
 /// `water_entries` table (via [EntryRepository]); the in-memory [_entries] list
@@ -184,14 +184,15 @@ class HydrationRepository {
   /// Drives the "Today's Mix" bars and the coffee-vs-water buddy nudge — both
   /// compare what was actually poured, so they use raw volume, not the
   /// hydration-weighted total.
-  Map<String, int> todayByType() {
+  Map<String, int> todayByType([DrinkCatalog catalog = const DrinkCatalog()]) {
     final today = DateTime.now();
     final byType = <String, int>{};
     for (final e in _live.where((e) => _isSameDay(e.timestamp, today))) {
-      // Resolve through the catalog so legacy/unknown type names (e.g. an old
-      // "Still Water") fold into their real drink type instead of becoming an
-      // invisible bucket that inflates the total.
-      final name = drinkTypeByName(e.type).name;
+      // Resolve through the catalog (built-ins + the user's custom drinks) so a
+      // logged custom drink keeps its own name and gets its own mix bar, while
+      // legacy/unknown type names still fold into a real drink type instead of
+      // becoming an invisible bucket that inflates the total.
+      final name = catalog.byName(e.type).name;
       byType[name] = (byType[name] ?? 0) + e.amountMl;
     }
     return byType;
